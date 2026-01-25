@@ -24,8 +24,13 @@ pub fn scan_directories() -> Vec<ScannedProject> {
         home.join("code"),
         home.join("Code"),
         home.join("src"),
+        home.join("Documents"),
         home.join("Documents").join("Projects"),
         home.join("Documents").join("projects"),
+        home.join("Documents").join("dev"),
+        home.join("Documents").join("Dev"),
+        home.join("Documents").join("code"),
+        home.join("Documents").join("Code"),
     ];
 
     let mut results = Vec::new();

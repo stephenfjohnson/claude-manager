@@ -24,6 +24,7 @@ enum InputMode {
     AddUrl,
     SetPath,
     EditRunCmd,
+    ImportPath,
 }
 
 pub struct App {
@@ -40,6 +41,7 @@ pub struct App {
     url_input: InputDialog,
     path_input: InputDialog,
     run_cmd_input: InputDialog,
+    import_path_input: InputDialog,
     pending_name: Option<String>,
     // Process management
     pub process_manager: ProcessManager,
@@ -70,6 +72,7 @@ impl App {
             url_input: InputDialog::new("GitHub URL"),
             path_input: InputDialog::new("Local Path"),
             run_cmd_input: InputDialog::new("Run Command"),
+            import_path_input: InputDialog::new("Import Path"),
             pending_name: None,
             process_manager: ProcessManager::new(),
             show_logs: true,
@@ -131,6 +134,17 @@ impl App {
                     self.input_mode = InputMode::Normal;
                 }
             }
+            InputMode::ImportPath => {
+                if let Some(path) = self.import_path_input.handle_key(key) {
+                    if !path.is_empty() {
+                        self.import_from_path(&path);
+                    }
+                    self.input_mode = InputMode::Normal;
+                }
+                if !self.import_path_input.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
         }
     }
 
@@ -156,6 +170,10 @@ impl App {
                     self.run_cmd_input.show();
                     self.input_mode = InputMode::EditRunCmd;
                 }
+            }
+            KeyCode::Char('i') => {
+                self.import_path_input.show();
+                self.input_mode = InputMode::ImportPath;
             }
             KeyCode::F(5) => self.full_refresh(),
             KeyCode::Enter => self.update_selected_details(),
@@ -206,6 +224,45 @@ impl App {
                     "Set run command for {} on {}",
                     project_name, self.machine_id
                 ));
+                self.update_selected_details();
+            }
+        }
+    }
+
+    fn import_from_path(&mut self, path_str: &str) {
+        use std::process::Command;
+
+        let path = Path::new(path_str);
+        if !path.exists() || !path.is_dir() {
+            return;
+        }
+
+        // Get project name from directory
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => return,
+        };
+
+        // Try to get git remote URL
+        let remote_url = Command::new("git")
+            .current_dir(path)
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        // Add project
+        if let Ok(id) = self.db.add_project(&name, &remote_url) {
+            // Set location
+            if self.db.set_location(id, &self.machine_id, path_str).is_ok() {
+                let _ = sync::push(&format!("Import project: {}", name));
+                self.projects = self.db.list_projects().unwrap_or_default();
+                // Select the new project
+                if let Some(idx) = self.projects.iter().position(|p| p.id == id) {
+                    self.list_state.select(Some(idx));
+                }
                 self.update_selected_details();
             }
         }
@@ -393,6 +450,7 @@ impl App {
         self.url_input.render(frame, area);
         self.path_input.render(frame, area);
         self.run_cmd_input.render(frame, area);
+        self.import_path_input.render(frame, area);
     }
 
     fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
@@ -455,7 +513,7 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let help_text = " [a]dd  [p]ath  [e]dit cmd  [r]un  [s]top  [d]elete  [F5]refresh  [q]uit ";
+        let help_text = " [a]dd  [i]mport  [p]ath  [e]dit  [r]un  [s]top  [d]el  [F5]  [q]uit ";
         let machine_text = format!(" Machine: {} ", self.machine_id);
 
         let help = Paragraph::new(Line::from(vec![
