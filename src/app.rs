@@ -11,16 +11,19 @@ use std::path::Path;
 use crate::config::MachineConfig;
 use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
+use crate::gh;
 use crate::git_status::{self, GitStatus};
 use crate::ports::{self, PortInfo};
 use crate::process::ProcessManager;
 use crate::sync;
 use crate::ui::input::InputDialog;
+use crate::ui::selector::RepoSelector;
 
 #[derive(Default, PartialEq)]
 enum InputMode {
     #[default]
     Normal,
+    SelectRepo,
     AddName,
     AddUrl,
     SetPath,
@@ -46,6 +49,7 @@ pub struct App {
     run_cmd_input: InputDialog,
     import_path_input: InputDialog,
     install_dir_input: InputDialog,
+    repo_selector: RepoSelector,
     pending_name: Option<String>,
     // Process management
     pub process_manager: ProcessManager,
@@ -84,6 +88,7 @@ impl App {
             run_cmd_input: InputDialog::new("Run Command"),
             import_path_input: InputDialog::new("Import Path"),
             install_dir_input: InputDialog::new("Install Directory"),
+            repo_selector: RepoSelector::new(),
             pending_name: None,
             process_manager: ProcessManager::new(),
             show_logs: true,
@@ -107,6 +112,14 @@ impl App {
     pub fn handle_key(&mut self, key: KeyCode) {
         match self.input_mode {
             InputMode::Normal => self.handle_normal_key(key),
+            InputMode::SelectRepo => {
+                if let Some((name, url)) = self.repo_selector.handle_key(key) {
+                    self.add_project(&name, &url);
+                }
+                if !self.repo_selector.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
             InputMode::AddName => {
                 if let Some(name) = self.name_input.handle_key(key) {
                     if !name.is_empty() {
@@ -205,8 +218,11 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.next(),
             KeyCode::Char('a') => {
-                self.name_input.show();
-                self.input_mode = InputMode::AddName;
+                // Fetch repos from GitHub and show selector
+                if let Ok(repos) = gh::list_repos() {
+                    self.repo_selector.show(repos);
+                    self.input_mode = InputMode::SelectRepo;
+                }
             }
             KeyCode::Char('p') => {
                 if self.selected_project().is_some() {
@@ -702,6 +718,7 @@ impl App {
         self.run_cmd_input.render(frame, area);
         self.import_path_input.render(frame, area);
         self.install_dir_input.render(frame, area);
+        self.repo_selector.render(frame, area);
 
         // Render quit confirmation dialog
         if self.input_mode == InputMode::ConfirmQuit {
