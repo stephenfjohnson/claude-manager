@@ -26,6 +26,10 @@ impl InputDialog {
         self.visible = true;
     }
 
+    pub fn set_value(&mut self, value: &str) {
+        self.value = value.to_string();
+    }
+
     pub fn hide(&mut self) {
         self.visible = false;
     }

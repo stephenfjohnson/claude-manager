@@ -8,6 +8,7 @@ use ratatui::{
 };
 use std::path::Path;
 
+use crate::config::MachineConfig;
 use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
 use crate::git_status::{self, GitStatus};
@@ -25,6 +26,8 @@ enum InputMode {
     SetPath,
     EditRunCmd,
     ImportPath,
+    SetInstallDir,
+    ConfirmQuit,
 }
 
 pub struct App {
@@ -42,6 +45,7 @@ pub struct App {
     path_input: InputDialog,
     run_cmd_input: InputDialog,
     import_path_input: InputDialog,
+    install_dir_input: InputDialog,
     pending_name: Option<String>,
     // Process management
     pub process_manager: ProcessManager,
@@ -49,6 +53,10 @@ pub struct App {
     // Port scanning
     pub port_info: Vec<PortInfo>,
     last_port_scan: std::time::Instant,
+    // Machine config
+    pub config: MachineConfig,
+    // Quit state
+    should_quit: bool,
 }
 
 impl App {
@@ -58,6 +66,8 @@ impl App {
         if !projects.is_empty() {
             list_state.select(Some(0));
         }
+
+        let config = MachineConfig::load().unwrap_or_default();
 
         let mut app = Self {
             projects,
@@ -73,14 +83,25 @@ impl App {
             path_input: InputDialog::new("Local Path"),
             run_cmd_input: InputDialog::new("Run Command"),
             import_path_input: InputDialog::new("Import Path"),
+            install_dir_input: InputDialog::new("Install Directory"),
             pending_name: None,
             process_manager: ProcessManager::new(),
             show_logs: true,
             port_info: ports::scan_ports(),
             last_port_scan: std::time::Instant::now(),
+            config,
+            should_quit: false,
         };
         app.update_selected_details();
         Ok(app)
+    }
+
+    pub fn should_quit(&self) -> bool {
+        self.should_quit
+    }
+
+    pub fn request_quit(&mut self) {
+        self.input_mode = InputMode::ConfirmQuit;
     }
 
     pub fn handle_key(&mut self, key: KeyCode) {
@@ -145,6 +166,25 @@ impl App {
                     self.input_mode = InputMode::Normal;
                 }
             }
+            InputMode::SetInstallDir => {
+                if let Some(dir) = self.install_dir_input.handle_key(key) {
+                    let dir_opt = if dir.is_empty() { None } else { Some(dir) };
+                    let _ = self.config.set_install_dir(dir_opt);
+                    self.input_mode = InputMode::Normal;
+                }
+                if !self.install_dir_input.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+            InputMode::ConfirmQuit => match key {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.should_quit = true;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.input_mode = InputMode::Normal;
+                }
+                _ => {}
+            },
         }
     }
 
@@ -175,6 +215,14 @@ impl App {
                 self.import_path_input.show();
                 self.input_mode = InputMode::ImportPath;
             }
+            KeyCode::Char('c') => {
+                // Prefill with current value
+                if let Some(ref dir) = self.config.install_dir {
+                    self.install_dir_input.set_value(dir);
+                }
+                self.install_dir_input.show();
+                self.input_mode = InputMode::SetInstallDir;
+            }
             KeyCode::F(5) => self.full_refresh(),
             KeyCode::Enter => self.update_selected_details(),
             _ => {}
@@ -183,6 +231,21 @@ impl App {
 
     fn add_project(&mut self, name: &str, url: &str) {
         if let Ok(id) = self.db.add_project(name, url) {
+            // Clone to install directory if configured
+            if let Some(install_dir) = self.config.get_install_dir() {
+                if !url.is_empty() {
+                    let dest = install_dir.join(name);
+                    if self.clone_repo(url, &dest) {
+                        // Set the location for this machine
+                        let _ = self.db.set_location(
+                            id,
+                            &self.machine_id,
+                            dest.to_str().unwrap_or(""),
+                        );
+                    }
+                }
+            }
+
             let _ = sync::push(&format!("Add project: {}", name));
             self.projects = self.db.list_projects().unwrap_or_default();
             // Select the new project
@@ -191,6 +254,28 @@ impl App {
             }
             self.update_selected_details();
         }
+    }
+
+    fn clone_repo(&self, url: &str, dest: &Path) -> bool {
+        use std::process::Command;
+
+        // Skip if destination already exists
+        if dest.exists() {
+            return true;
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        Command::new("git")
+            .args(["clone", url, dest.to_str().unwrap_or("")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
 
     fn set_path(&mut self, path: &str) {
@@ -604,6 +689,36 @@ impl App {
         self.path_input.render(frame, area);
         self.run_cmd_input.render(frame, area);
         self.import_path_input.render(frame, area);
+        self.install_dir_input.render(frame, area);
+
+        // Render quit confirmation dialog
+        if self.input_mode == InputMode::ConfirmQuit {
+            self.render_quit_dialog(frame, area);
+        }
+    }
+
+    fn render_quit_dialog(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::widgets::Clear;
+
+        let width = 40.min(area.width.saturating_sub(4));
+        let height = 3;
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let dialog_area = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, dialog_area);
+
+        let text = Paragraph::new("Quit? (y/n)")
+            .style(Style::default().fg(Color::White))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Confirm ")
+                    .border_style(Style::default().fg(Color::Yellow)),
+            )
+            .alignment(ratatui::layout::Alignment::Center);
+
+        frame.render_widget(text, dialog_area);
     }
 
     fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
@@ -666,7 +781,7 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let help_text = " [a]dd  [i]mport  [p]ath  [e]dit  [r]un  [s]top  [d]el  [F5]  [q]uit ";
+        let help_text = " [a]dd  [i]mport  [p]ath  [e]dit  [r]un  [s]top  [d]el  [c]fg  [F5]  [q]uit ";
         let machine_text = format!(" Machine: {} ", self.machine_id);
 
         let help = Paragraph::new(Line::from(vec![

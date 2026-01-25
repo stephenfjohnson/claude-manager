@@ -28,17 +28,23 @@ impl Tui {
         loop {
             self.terminal.draw(|frame| app.render(frame))?;
 
+            // Check if app wants to quit
+            if app.should_quit() {
+                // Stop all running processes before quitting
+                for project_id in app.process_manager.running_projects() {
+                    let _ = app.process_manager.stop(project_id);
+                }
+                break;
+            }
+
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         if key.code == KeyCode::Char('q') && !app.is_input_mode() {
-                            // Stop all running processes before quitting
-                            for project_id in app.process_manager.running_projects() {
-                                let _ = app.process_manager.stop(project_id);
-                            }
-                            break;
+                            app.request_quit();
+                        } else {
+                            app.handle_key(key.code);
                         }
-                        app.handle_key(key.code);
                     }
                 }
             }
