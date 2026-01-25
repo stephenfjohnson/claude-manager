@@ -235,19 +235,38 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(frame.area());
 
-        self.render_project_list(frame, chunks[0]);
-        self.render_details(frame, chunks[1]);
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(main_chunks[0]);
+
+        self.render_project_list(frame, content_chunks[0]);
+        self.render_details(frame, content_chunks[1]);
+        self.render_help_bar(frame, main_chunks[1]);
 
         // Render input dialogs on top
         let area = frame.area();
         self.name_input.render(frame, area);
         self.url_input.render(frame, area);
         self.path_input.render(frame, area);
+    }
+
+    fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
+        let help_text = " [a]dd  [p]ath  [d]elete  [q]uit ";
+        let machine_text = format!(" Machine: {} ", self.machine_id);
+
+        let help = Paragraph::new(Line::from(vec![
+            Span::styled(help_text, Style::default().fg(Color::DarkGray)),
+            Span::raw(" | "),
+            Span::styled(machine_text, Style::default().fg(Color::Cyan)),
+        ]));
+
+        frame.render_widget(help, area);
     }
 
     fn render_project_list(&mut self, frame: &mut Frame, area: Rect) {
