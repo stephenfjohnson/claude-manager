@@ -92,6 +92,8 @@ fn git_command(cwd: &Path, args: &[&str]) -> Result<()> {
     let status = Command::new("git")
         .current_dir(cwd)
         .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()?;
 
     if !status.success() {
