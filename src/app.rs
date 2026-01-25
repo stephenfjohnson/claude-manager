@@ -340,31 +340,45 @@ impl App {
                 let shell_cmd = format!("cd '{}' && claude; exec $SHELL", path_str);
                 let _ = Command::new("ghostty")
                     .args(["-e", "bash", "-c", &shell_cmd])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             } else if Command::new("which").arg("alacritty").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("alacritty")
                     .args(["--working-directory", &path_str, "-e", "claude"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             } else if Command::new("which").arg("kitty").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("kitty")
                     .args(["--directory", &path_str, "claude"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             } else if Command::new("which").arg("gnome-terminal").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("gnome-terminal")
                     .args(["--working-directory", &path_str, "--", "claude"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             } else if Command::new("which").arg("konsole").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("konsole")
                     .args(["--workdir", &path_str, "-e", "claude"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             } else if Command::new("which").arg("xfce4-terminal").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("xfce4-terminal")
                     .args(["--working-directory", &path_str, "-e", "claude"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             } else if Command::new("which").arg("xterm").output().map(|o| o.status.success()).unwrap_or(false) {
                 let xterm_cmd = format!("cd '{}' && claude", path_str);
                 let _ = Command::new("xterm")
                     .args(["-e", &xterm_cmd])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
             }
         }
