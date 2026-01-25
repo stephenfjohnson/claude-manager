@@ -1,4 +1,5 @@
 mod errors;
+mod machine;
 
 use clap::Parser;
 
@@ -15,9 +16,13 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     if cli.init {
-        println!("Init mode - not yet implemented");
+        let machine_id = machine::get_or_create_machine_id()?;
+        println!("Machine ID: {}", machine_id);
     } else {
-        println!("TUI mode - not yet implemented");
+        match machine::get_machine_id()? {
+            Some(id) => println!("Machine ID: {}", id),
+            None => println!("Not initialized. Run with --init first."),
+        }
     }
 
     Ok(())
