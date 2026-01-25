@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
+use crate::git_status::{self, GitStatus};
 use crate::ports::{self, PortInfo};
 use crate::process::ProcessManager;
 use crate::sync;
@@ -31,6 +32,7 @@ pub struct App {
     pub list_state: ListState,
     pub selected_location: Option<MachineLocation>,
     pub selected_detection: Option<detect::DetectedProject>,
+    pub selected_git_status: Option<GitStatus>,
     // Input dialogs
     input_mode: InputMode,
     name_input: InputDialog,
@@ -60,6 +62,7 @@ impl App {
             list_state,
             selected_location: None,
             selected_detection: None,
+            selected_git_status: None,
             input_mode: InputMode::Normal,
             name_input: InputDialog::new("Project Name"),
             url_input: InputDialog::new("GitHub URL"),
@@ -256,6 +259,7 @@ impl App {
     fn update_selected_details(&mut self) {
         self.selected_location = None;
         self.selected_detection = None;
+        self.selected_git_status = None;
 
         if let Some(idx) = self.list_state.selected() {
             if let Some(project) = self.projects.get(idx) {
@@ -266,7 +270,9 @@ impl App {
                     .flatten();
 
                 if let Some(ref loc) = self.selected_location {
-                    self.selected_detection = detect::detect(Path::new(&loc.path)).ok();
+                    let path = Path::new(&loc.path);
+                    self.selected_detection = detect::detect(path).ok();
+                    self.selected_git_status = git_status::get_status(path).ok();
                 }
             }
         }
@@ -459,6 +465,45 @@ impl App {
                     Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
                     Span::raw(&loc.path),
                 ]));
+
+                // Git status
+                if let Some(ref git) = self.selected_git_status {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(vec![
+                        Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(&git.branch),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Staged: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(git.staged.to_string()),
+                        Span::raw("  "),
+                        Span::styled("Modified: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(git.modified.to_string()),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Ahead: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            git.ahead.to_string(),
+                            Style::default().fg(if git.ahead > 0 {
+                                Color::Yellow
+                            } else {
+                                Color::White
+                            }),
+                        ),
+                        Span::raw("  "),
+                        Span::styled("Behind: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            git.behind.to_string(),
+                            Style::default().fg(if git.behind > 0 {
+                                Color::Red
+                            } else {
+                                Color::White
+                            }),
+                        ),
+                    ]));
+                }
+
+                lines.push(Line::from(""));
 
                 if let Some(ref det) = self.selected_detection {
                     if let Some(pm) = det.package_manager {

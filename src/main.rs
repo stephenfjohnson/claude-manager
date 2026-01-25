@@ -3,6 +3,7 @@ mod db;
 mod detect;
 mod errors;
 mod gh;
+mod git_status;
 mod machine;
 mod ports;
 mod process;
