@@ -337,8 +337,9 @@ impl App {
         {
             // Try common Linux terminal emulators in order of preference
             if Command::new("which").arg("ghostty").output().map(|o| o.status.success()).unwrap_or(false) {
+                let shell_cmd = format!("cd '{}' && claude; exec $SHELL", path_str);
                 let _ = Command::new("ghostty")
-                    .args(["-e", "claude", "--working-directory", &path_str])
+                    .args(["-e", "bash", "-c", &shell_cmd])
                     .spawn();
             } else if Command::new("which").arg("alacritty").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("alacritty")
