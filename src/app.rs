@@ -38,6 +38,7 @@ pub struct App {
     pending_name: Option<String>,
     // Process management
     pub process_manager: ProcessManager,
+    show_logs: bool,
 }
 
 impl App {
@@ -61,6 +62,7 @@ impl App {
             path_input: InputDialog::new("Local Path"),
             pending_name: None,
             process_manager: ProcessManager::new(),
+            show_logs: true,
         };
         app.update_selected_details();
         Ok(app)
@@ -271,10 +273,23 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(frame.area());
+        let has_running = !self.process_manager.running_projects().is_empty();
+
+        let main_chunks = if has_running && self.show_logs {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(10),
+                    Constraint::Length(10),
+                    Constraint::Length(1),
+                ])
+                .split(frame.area())
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
+                .split(frame.area())
+        };
 
         let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -283,13 +298,48 @@ impl App {
 
         self.render_project_list(frame, content_chunks[0]);
         self.render_details(frame, content_chunks[1]);
-        self.render_help_bar(frame, main_chunks[1]);
+
+        if has_running && self.show_logs {
+            self.render_logs(frame, main_chunks[1]);
+            self.render_help_bar(frame, main_chunks[2]);
+        } else {
+            self.render_help_bar(frame, main_chunks[1]);
+        }
 
         // Render input dialogs on top
         let area = frame.area();
         self.name_input.render(frame, area);
         self.url_input.render(frame, area);
         self.path_input.render(frame, area);
+    }
+
+    fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
+        let project_id = self.selected_project().map(|p| p.id);
+        let project_name = self.selected_project().map(|p| p.name.clone());
+
+        let (title, lines) = if let Some(id) = project_id {
+            if self.process_manager.is_running(id) {
+                let output = self.process_manager.get_output(id);
+                let title = format!(" Logs ({}) ", project_name.unwrap_or_default());
+                (title, output)
+            } else {
+                (" Logs ".to_string(), vec!["No process running".to_string()])
+            }
+        } else {
+            (" Logs ".to_string(), vec!["Select a project".to_string()])
+        };
+
+        // Show last N lines that fit
+        let available_lines = (area.height as usize).saturating_sub(2);
+        let start = lines.len().saturating_sub(available_lines);
+        let visible_lines: Vec<Line> = lines[start..]
+            .iter()
+            .map(|s| Line::from(s.as_str()))
+            .collect();
+
+        let para = Paragraph::new(visible_lines)
+            .block(Block::default().borders(Borders::ALL).title(title));
+        frame.render_widget(para, area);
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
