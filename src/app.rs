@@ -306,22 +306,95 @@ impl App {
         if let Some(project) = self.selected_project() {
             let project_id = project.id;
 
-            if self.process_manager.is_running(project_id) {
-                return; // Already running
-            }
-
             if let Some(ref loc) = self.selected_location {
                 let path = Path::new(&loc.path);
 
-                // Determine command: override > detected > none
-                let cmd = loc
-                    .run_command
-                    .clone()
-                    .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
+                // Spawn a new terminal with claude
+                self.spawn_terminal_with_claude(path);
 
-                if let Some(cmd) = cmd {
-                    let _ = self.process_manager.start(project_id, path, &cmd);
+                // Also start any dev server in background if not already running
+                if !self.process_manager.is_running(project_id) {
+                    let cmd = loc
+                        .run_command
+                        .clone()
+                        .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
+
+                    if let Some(cmd) = cmd {
+                        let _ = self.process_manager.start(project_id, path, &cmd);
+                    }
                 }
+            }
+        }
+    }
+
+    fn spawn_terminal_with_claude(&self, path: &Path) {
+        use std::process::Command;
+
+        let path_str = path.to_string_lossy().to_string();
+
+        // Try various terminal emulators in order of preference
+        #[cfg(target_os = "linux")]
+        {
+            // Try common Linux terminal emulators in order of preference
+            if Command::new("which").arg("alacritty").output().map(|o| o.status.success()).unwrap_or(false) {
+                let _ = Command::new("alacritty")
+                    .args(["--working-directory", &path_str, "-e", "claude"])
+                    .spawn();
+            } else if Command::new("which").arg("kitty").output().map(|o| o.status.success()).unwrap_or(false) {
+                let _ = Command::new("kitty")
+                    .args(["--directory", &path_str, "claude"])
+                    .spawn();
+            } else if Command::new("which").arg("gnome-terminal").output().map(|o| o.status.success()).unwrap_or(false) {
+                let _ = Command::new("gnome-terminal")
+                    .args(["--working-directory", &path_str, "--", "claude"])
+                    .spawn();
+            } else if Command::new("which").arg("konsole").output().map(|o| o.status.success()).unwrap_or(false) {
+                let _ = Command::new("konsole")
+                    .args(["--workdir", &path_str, "-e", "claude"])
+                    .spawn();
+            } else if Command::new("which").arg("xfce4-terminal").output().map(|o| o.status.success()).unwrap_or(false) {
+                let _ = Command::new("xfce4-terminal")
+                    .args(["--working-directory", &path_str, "-e", "claude"])
+                    .spawn();
+            } else if Command::new("which").arg("xterm").output().map(|o| o.status.success()).unwrap_or(false) {
+                let xterm_cmd = format!("cd '{}' && claude", path_str);
+                let _ = Command::new("xterm")
+                    .args(["-e", &xterm_cmd])
+                    .spawn();
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // Use osascript to open Terminal.app
+            let script = format!(
+                r#"tell application "Terminal"
+                    activate
+                    do script "cd '{}' && claude"
+                end tell"#,
+                path_str
+            );
+            let _ = Command::new("osascript")
+                .args(["-e", &script])
+                .spawn();
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Try Windows Terminal first, fall back to cmd
+            if Command::new("where")
+                .arg("wt")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                let _ = Command::new("wt")
+                    .args(["-d", &path_str, "cmd", "/k", "claude"])
+                    .spawn();
+            } else {
+                let _ = Command::new("cmd")
+                    .args(["/c", "start", "cmd", "/k", &format!("cd /d \"{}\" && claude", path_str)])
+                    .spawn();
             }
         }
     }
