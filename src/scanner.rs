@@ -37,9 +37,7 @@ pub fn scan_directories() -> Vec<ScannedProject> {
 
     for dir in search_dirs {
         if dir.exists() {
-            if let Ok(projects) = scan_directory(&dir) {
-                results.extend(projects);
-            }
+            scan_directory_recursive(&dir, 3, &mut results);
         }
     }
 
@@ -50,11 +48,17 @@ pub fn scan_directories() -> Vec<ScannedProject> {
     results
 }
 
-fn scan_directory(dir: &Path) -> Result<Vec<ScannedProject>> {
-    let mut results = Vec::new();
+fn scan_directory_recursive(dir: &Path, depth: usize, results: &mut Vec<ScannedProject>) {
+    if depth == 0 {
+        return;
+    }
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
         let path = entry.path();
 
         if !path.is_dir() {
@@ -71,25 +75,31 @@ fn scan_directory(dir: &Path) -> Result<Vec<ScannedProject>> {
             continue;
         }
 
+        // Skip common non-project directories
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if matches!(
+            dir_name,
+            "node_modules" | "target" | "build" | "dist" | "vendor" | "__pycache__"
+        ) {
+            continue;
+        }
+
         // Check if it's a git repo
         if path.join(".git").exists() {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-
+            let name = dir_name.to_string();
             let remote_url = get_git_remote(&path);
 
             results.push(ScannedProject {
-                path,
+                path: path.clone(),
                 name,
                 remote_url,
             });
+            // Don't recurse into git repos (submodules would be separate)
+        } else {
+            // Not a git repo, recurse deeper
+            scan_directory_recursive(&path, depth - 1, results);
         }
     }
-
-    Ok(results)
 }
 
 fn get_git_remote(path: &Path) -> Option<String> {
