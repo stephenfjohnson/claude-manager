@@ -1,9 +1,11 @@
+mod app;
 mod db;
 mod detect;
 mod errors;
 mod gh;
 mod machine;
 mod sync;
+mod tui;
 
 use crate::errors::AppError;
 use clap::Parser;
@@ -37,15 +39,12 @@ fn main() -> anyhow::Result<()> {
 fn run_init() -> anyhow::Result<()> {
     println!("Initializing Claude Manager...\n");
 
-    // 1. Generate machine ID
     let machine_id = machine::get_or_create_machine_id()?;
     println!("Machine ID: {}", machine_id);
 
-    // 2. Setup sync repo
     sync::init()?;
     println!("Sync repo ready.");
 
-    // 3. Open database to ensure schema exists
     let db_path = sync::db_path()?;
     let _db = db::Database::open(&db_path)?;
     println!("Database initialized.");
@@ -55,29 +54,19 @@ fn run_init() -> anyhow::Result<()> {
 }
 
 fn run_tui() -> anyhow::Result<()> {
-    // Check if initialized
     if !sync::is_initialized()? {
         return Err(AppError::NotInitialized.into());
     }
 
-    // Pull latest
-    println!("Syncing...");
     sync::pull()?;
 
-    // Load machine ID and database
     let machine_id = machine::get_machine_id()?.ok_or(AppError::NotInitialized)?;
     let db_path = sync::db_path()?;
     let db = db::Database::open(&db_path)?;
 
-    let projects = db.list_projects()?;
-    println!("\nProjects ({}):", projects.len());
-    for p in &projects {
-        let loc = db.get_location(p.id, &machine_id)?;
-        let status = if loc.is_some() { "+" } else { "-" };
-        println!("  {} {} ({})", status, p.name, p.repo_url);
-    }
-
-    println!("\nTUI not yet implemented. Press Ctrl+C to exit.");
+    let mut app = app::App::new(db, machine_id)?;
+    let mut tui = tui::Tui::new()?;
+    tui.run(&mut app)?;
 
     Ok(())
 }
