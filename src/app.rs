@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
+use crate::process::ProcessManager;
 use crate::sync;
 use crate::ui::input::InputDialog;
 
@@ -35,6 +36,8 @@ pub struct App {
     url_input: InputDialog,
     path_input: InputDialog,
     pending_name: Option<String>,
+    // Process management
+    pub process_manager: ProcessManager,
 }
 
 impl App {
@@ -57,6 +60,7 @@ impl App {
             url_input: InputDialog::new("GitHub URL"),
             path_input: InputDialog::new("Local Path"),
             pending_name: None,
+            process_manager: ProcessManager::new(),
         };
         app.update_selected_details();
         Ok(app)
@@ -122,6 +126,8 @@ impl App {
                 }
             }
             KeyCode::Char('d') => self.delete_selected(),
+            KeyCode::Char('r') => self.run_selected(),
+            KeyCode::Char('s') => self.stop_selected(),
             _ => {}
         }
     }
@@ -172,6 +178,36 @@ impl App {
                 }
                 self.update_selected_details();
             }
+        }
+    }
+
+    fn run_selected(&mut self) {
+        if let Some(project) = self.selected_project() {
+            let project_id = project.id;
+
+            if self.process_manager.is_running(project_id) {
+                return; // Already running
+            }
+
+            if let Some(ref loc) = self.selected_location {
+                let path = Path::new(&loc.path);
+
+                // Determine command: override > detected > none
+                let cmd = loc
+                    .run_command
+                    .clone()
+                    .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
+
+                if let Some(cmd) = cmd {
+                    let _ = self.process_manager.start(project_id, path, &cmd);
+                }
+            }
+        }
+    }
+
+    fn stop_selected(&mut self) {
+        if let Some(project) = self.selected_project() {
+            let _ = self.process_manager.stop(project.id);
         }
     }
 
@@ -257,7 +293,7 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let help_text = " [a]dd  [p]ath  [d]elete  [q]uit ";
+        let help_text = " [a]dd  [p]ath  [r]un  [s]top  [d]elete  [q]uit ";
         let machine_text = format!(" Machine: {} ", self.machine_id);
 
         let help = Paragraph::new(Line::from(vec![
@@ -280,15 +316,17 @@ impl App {
                     .ok()
                     .flatten()
                     .is_some();
-                let indicator = if has_path { "+" } else { "-" };
+                let is_running = self.process_manager.is_running(p.id);
 
-                let line = Line::from(vec![
-                    Span::styled(
-                        format!(" {} ", indicator),
-                        Style::default().fg(if has_path { Color::Green } else { Color::Red }),
-                    ),
-                    Span::raw(&p.name),
-                ]);
+                let status = if is_running {
+                    Span::styled(" * ", Style::default().fg(Color::Green))
+                } else if has_path {
+                    Span::styled(" + ", Style::default().fg(Color::Green))
+                } else {
+                    Span::styled(" - ", Style::default().fg(Color::Red))
+                };
+
+                let line = Line::from(vec![status, Span::raw(&p.name)]);
                 ListItem::new(line)
             })
             .collect();
