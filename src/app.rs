@@ -10,6 +10,17 @@ use std::path::Path;
 
 use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
+use crate::sync;
+use crate::ui::input::InputDialog;
+
+#[derive(Default, PartialEq)]
+enum InputMode {
+    #[default]
+    Normal,
+    AddName,
+    AddUrl,
+    SetPath,
+}
 
 pub struct App {
     pub projects: Vec<Project>,
@@ -18,6 +29,12 @@ pub struct App {
     pub list_state: ListState,
     pub selected_location: Option<MachineLocation>,
     pub selected_detection: Option<detect::DetectedProject>,
+    // Input dialogs
+    input_mode: InputMode,
+    name_input: InputDialog,
+    url_input: InputDialog,
+    path_input: InputDialog,
+    pending_name: Option<String>,
 }
 
 impl App {
@@ -35,17 +52,131 @@ impl App {
             list_state,
             selected_location: None,
             selected_detection: None,
+            input_mode: InputMode::Normal,
+            name_input: InputDialog::new("Project Name"),
+            url_input: InputDialog::new("GitHub URL"),
+            path_input: InputDialog::new("Local Path"),
+            pending_name: None,
         };
         app.update_selected_details();
         Ok(app)
     }
 
     pub fn handle_key(&mut self, key: KeyCode) {
+        match self.input_mode {
+            InputMode::Normal => self.handle_normal_key(key),
+            InputMode::AddName => {
+                if let Some(name) = self.name_input.handle_key(key) {
+                    if !name.is_empty() {
+                        self.pending_name = Some(name);
+                        self.url_input.show();
+                        self.input_mode = InputMode::AddUrl;
+                    } else {
+                        self.input_mode = InputMode::Normal;
+                    }
+                }
+                if !self.name_input.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+            InputMode::AddUrl => {
+                if let Some(url) = self.url_input.handle_key(key) {
+                    if let Some(name) = self.pending_name.take() {
+                        if !url.is_empty() {
+                            self.add_project(&name, &url);
+                        }
+                    }
+                    self.input_mode = InputMode::Normal;
+                }
+                if !self.url_input.visible {
+                    self.input_mode = InputMode::Normal;
+                    self.pending_name = None;
+                }
+            }
+            InputMode::SetPath => {
+                if let Some(path) = self.path_input.handle_key(key) {
+                    if !path.is_empty() {
+                        self.set_path(&path);
+                    }
+                    self.input_mode = InputMode::Normal;
+                }
+                if !self.path_input.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+        }
+    }
+
+    fn handle_normal_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Up | KeyCode::Char('k') => self.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.next(),
+            KeyCode::Char('a') => {
+                self.name_input.show();
+                self.input_mode = InputMode::AddName;
+            }
+            KeyCode::Char('p') => {
+                if self.selected_project().is_some() {
+                    self.path_input.show();
+                    self.input_mode = InputMode::SetPath;
+                }
+            }
+            KeyCode::Char('d') => self.delete_selected(),
             _ => {}
         }
+    }
+
+    fn add_project(&mut self, name: &str, url: &str) {
+        if let Ok(id) = self.db.add_project(name, url) {
+            let _ = sync::push(&format!("Add project: {}", name));
+            self.projects = self.db.list_projects().unwrap_or_default();
+            // Select the new project
+            if let Some(idx) = self.projects.iter().position(|p| p.id == id) {
+                self.list_state.select(Some(idx));
+            }
+            self.update_selected_details();
+        }
+    }
+
+    fn set_path(&mut self, path: &str) {
+        if let Some(project) = self.selected_project() {
+            let project_id = project.id;
+            let project_name = project.name.clone();
+            if self
+                .db
+                .set_location(project_id, &self.machine_id, path)
+                .is_ok()
+            {
+                let _ = sync::push(&format!(
+                    "Set path for {} on {}",
+                    project_name, self.machine_id
+                ));
+                self.update_selected_details();
+            }
+        }
+    }
+
+    fn delete_selected(&mut self) {
+        if let Some(project) = self.selected_project() {
+            let id = project.id;
+            let name = project.name.clone();
+            if self.db.delete_project(id).is_ok() {
+                let _ = sync::push(&format!("Delete project: {}", name));
+                self.projects = self.db.list_projects().unwrap_or_default();
+                if self.projects.is_empty() {
+                    self.list_state.select(None);
+                } else if let Some(idx) = self.list_state.selected() {
+                    if idx >= self.projects.len() {
+                        self.list_state.select(Some(self.projects.len() - 1));
+                    }
+                }
+                self.update_selected_details();
+            }
+        }
+    }
+
+    pub fn is_input_mode(&self) -> bool {
+        self.input_mode != InputMode::Normal
     }
 
     fn next(&mut self) {
@@ -111,6 +242,12 @@ impl App {
 
         self.render_project_list(frame, chunks[0]);
         self.render_details(frame, chunks[1]);
+
+        // Render input dialogs on top
+        let area = frame.area();
+        self.name_input.render(frame, area);
+        self.url_input.render(frame, area);
+        self.path_input.render(frame, area);
     }
 
     fn render_project_list(&mut self, frame: &mut Frame, area: Rect) {

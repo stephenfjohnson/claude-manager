@@ -31,10 +31,10 @@ impl Tui {
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Char('q') => break,
-                            _ => app.handle_key(key.code),
+                        if key.code == KeyCode::Char('q') && !app.is_input_mode() {
+                            break;
                         }
+                        app.handle_key(key.code);
                     }
                 }
             }

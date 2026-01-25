@@ -6,6 +6,7 @@ mod gh;
 mod machine;
 mod sync;
 mod tui;
+mod ui;
 
 use crate::errors::AppError;
 use clap::Parser;
