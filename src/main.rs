@@ -4,6 +4,7 @@ mod detect;
 mod errors;
 mod gh;
 mod machine;
+mod ports;
 mod process;
 mod sync;
 mod tui;

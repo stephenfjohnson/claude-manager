@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
+use crate::ports::{self, PortInfo};
 use crate::process::ProcessManager;
 use crate::sync;
 use crate::ui::input::InputDialog;
@@ -39,6 +40,9 @@ pub struct App {
     // Process management
     pub process_manager: ProcessManager,
     show_logs: bool,
+    // Port scanning
+    pub port_info: Vec<PortInfo>,
+    last_port_scan: std::time::Instant,
 }
 
 impl App {
@@ -63,6 +67,8 @@ impl App {
             pending_name: None,
             process_manager: ProcessManager::new(),
             show_logs: true,
+            port_info: ports::scan_ports(),
+            last_port_scan: std::time::Instant::now(),
         };
         app.update_selected_details();
         Ok(app)
@@ -272,7 +278,16 @@ impl App {
             .and_then(|i| self.projects.get(i))
     }
 
+    fn maybe_refresh_ports(&mut self) {
+        if self.last_port_scan.elapsed() > std::time::Duration::from_secs(30) {
+            self.port_info = ports::scan_ports();
+            self.last_port_scan = std::time::Instant::now();
+        }
+    }
+
     pub fn render(&mut self, frame: &mut Frame) {
+        self.maybe_refresh_ports();
+
         let has_running = !self.process_manager.running_projects().is_empty();
 
         let main_chunks = if has_running && self.show_logs {
@@ -282,12 +297,17 @@ impl App {
                     Constraint::Min(10),
                     Constraint::Length(10),
                     Constraint::Length(1),
+                    Constraint::Length(1),
                 ])
                 .split(frame.area())
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
                 .split(frame.area())
         };
 
@@ -301,9 +321,11 @@ impl App {
 
         if has_running && self.show_logs {
             self.render_logs(frame, main_chunks[1]);
-            self.render_help_bar(frame, main_chunks[2]);
+            self.render_ports_bar(frame, main_chunks[2]);
+            self.render_help_bar(frame, main_chunks[3]);
         } else {
-            self.render_help_bar(frame, main_chunks[1]);
+            self.render_ports_bar(frame, main_chunks[1]);
+            self.render_help_bar(frame, main_chunks[2]);
         }
 
         // Render input dialogs on top
@@ -339,6 +361,36 @@ impl App {
 
         let para = Paragraph::new(visible_lines)
             .block(Block::default().borders(Borders::ALL).title(title));
+        frame.render_widget(para, area);
+    }
+
+    fn render_ports_bar(&self, frame: &mut Frame, area: Rect) {
+        let port_spans: Vec<Span> = self
+            .port_info
+            .iter()
+            .map(|p| {
+                let label = match (&p.process_name, p.pid) {
+                    (Some(name), Some(pid)) => format!("{}({},{})", p.port, name, pid),
+                    (Some(name), None) => format!("{}({})", p.port, name),
+                    (None, Some(pid)) => format!("{}(PID:{})", p.port, pid),
+                    (None, None) => format!("{}", p.port),
+                };
+                Span::styled(format!(" {} ", label), Style::default().fg(Color::Yellow))
+            })
+            .collect();
+
+        let content = if port_spans.is_empty() {
+            Line::from(Span::styled(
+                " No ports in use ",
+                Style::default().fg(Color::DarkGray),
+            ))
+        } else {
+            let mut spans = vec![Span::styled("Ports:", Style::default().fg(Color::DarkGray))];
+            spans.extend(port_spans);
+            Line::from(spans)
+        };
+
+        let para = Paragraph::new(content);
         frame.render_widget(para, area);
     }
 
