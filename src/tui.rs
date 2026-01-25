@@ -1,6 +1,9 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -18,7 +21,7 @@ impl Tui {
     pub fn new() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
         Ok(Self { terminal })
@@ -38,14 +41,20 @@ impl Tui {
             }
 
             if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        if key.code == KeyCode::Char('q') && !app.is_input_mode() {
-                            app.request_quit();
-                        } else {
-                            app.handle_key(key.code);
+                match event::read()? {
+                    Event::Key(key) => {
+                        if key.kind == KeyEventKind::Press {
+                            if key.code == KeyCode::Char('q') && !app.is_input_mode() {
+                                app.request_quit();
+                            } else {
+                                app.handle_key(key.code);
+                            }
                         }
                     }
+                    Event::Paste(text) => {
+                        app.handle_paste(&text);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -59,7 +68,8 @@ impl Drop for Tui {
         let _ = execute!(
             self.terminal.backend_mut(),
             LeaveAlternateScreen,
-            DisableMouseCapture
+            DisableMouseCapture,
+            DisableBracketedPaste
         );
     }
 }

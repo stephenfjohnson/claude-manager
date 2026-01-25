@@ -188,6 +188,18 @@ impl App {
         }
     }
 
+    pub fn handle_paste(&mut self, text: &str) {
+        match self.input_mode {
+            InputMode::AddName => self.name_input.value.push_str(text),
+            InputMode::AddUrl => self.url_input.value.push_str(text),
+            InputMode::SetPath => self.path_input.value.push_str(text),
+            InputMode::EditRunCmd => self.run_cmd_input.value.push_str(text),
+            InputMode::ImportPath => self.import_path_input.value.push_str(text),
+            InputMode::SetInstallDir => self.install_dir_input.value.push_str(text),
+            _ => {}
+        }
+    }
+
     fn handle_normal_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Up | KeyCode::Char('k') => self.previous(),
