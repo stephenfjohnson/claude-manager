@@ -1,3 +1,4 @@
+mod db;
 mod errors;
 mod gh;
 mod machine;
