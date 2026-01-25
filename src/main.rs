@@ -1,4 +1,5 @@
 mod db;
+mod detect;
 mod errors;
 mod gh;
 mod machine;
