@@ -336,7 +336,11 @@ impl App {
         #[cfg(target_os = "linux")]
         {
             // Try common Linux terminal emulators in order of preference
-            if Command::new("which").arg("alacritty").output().map(|o| o.status.success()).unwrap_or(false) {
+            if Command::new("which").arg("ghostty").output().map(|o| o.status.success()).unwrap_or(false) {
+                let _ = Command::new("ghostty")
+                    .args(["-e", "claude", "--working-directory", &path_str])
+                    .spawn();
+            } else if Command::new("which").arg("alacritty").output().map(|o| o.status.success()).unwrap_or(false) {
                 let _ = Command::new("alacritty")
                     .args(["--working-directory", &path_str, "-e", "claude"])
                     .spawn();
