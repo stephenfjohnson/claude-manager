@@ -22,7 +22,7 @@ pub fn repo_exists(repo_name: &str) -> Result<bool> {
 /// Create a private repo
 pub fn create_repo(repo_name: &str) -> Result<()> {
     let status = Command::new("gh")
-        .args(["repo", "create", repo_name, "--private", "--yes"])
+        .args(["repo", "create", repo_name, "--private"])
         .status()?;
 
     if !status.success() {
