@@ -309,6 +309,14 @@ impl App {
             if let Some(ref loc) = self.selected_location {
                 let path = Path::new(&loc.path);
 
+                // Git fetch before running (blocking)
+                self.git_fetch(path);
+
+                // Install dependencies for JS projects before starting dev server
+                if self.is_js_project() {
+                    self.install_node_modules(path);
+                }
+
                 // Spawn a new terminal with claude
                 self.spawn_terminal_with_claude(path);
 
@@ -320,11 +328,64 @@ impl App {
                         .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
 
                     if let Some(cmd) = cmd {
-                        let _ = self.process_manager.start(project_id, path, &cmd);
+                        // For JavaScript projects, find an available port
+                        let port = if self.is_js_project() {
+                            ports::find_available_port()
+                        } else {
+                            None
+                        };
+
+                        let _ = self.process_manager.start_with_port(project_id, path, &cmd, port);
                     }
                 }
             }
         }
+    }
+
+    fn git_fetch(&self, path: &Path) {
+        use std::process::Command;
+
+        // Run git fetch and wait for completion
+        let _ = Command::new("git")
+            .args(["fetch", "--all", "--prune"])
+            .current_dir(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(); // .status() waits for completion
+    }
+
+    fn install_node_modules(&self, path: &Path) {
+        use std::process::Command;
+
+        // Get the package manager from detection
+        let pm = self
+            .selected_detection
+            .as_ref()
+            .and_then(|d| d.package_manager)
+            .unwrap_or(detect::PackageManager::Npm);
+
+        let install_cmd = match pm {
+            detect::PackageManager::Pnpm => "pnpm",
+            detect::PackageManager::Yarn => "yarn",
+            detect::PackageManager::Bun => "bun",
+            detect::PackageManager::Npm => "npm",
+            _ => return, // Not a JS package manager
+        };
+
+        // Run install and wait for completion
+        let _ = Command::new(install_cmd)
+            .arg("install")
+            .current_dir(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    fn is_js_project(&self) -> bool {
+        self.selected_detection
+            .as_ref()
+            .map(|d| d.project_type == detect::ProjectType::JavaScript)
+            .unwrap_or(false)
     }
 
     fn spawn_terminal_with_claude(&self, path: &Path) {

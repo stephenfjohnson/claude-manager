@@ -19,7 +19,18 @@ impl ProcessManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn start(&mut self, project_id: i64, cwd: &Path, command: &str) -> Result<()> {
+        self.start_with_port(project_id, cwd, command, None)
+    }
+
+    pub fn start_with_port(
+        &mut self,
+        project_id: i64,
+        cwd: &Path,
+        command: &str,
+        port: Option<u16>,
+    ) -> Result<()> {
         // Parse command into program and args
         let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
@@ -29,12 +40,18 @@ impl ProcessManager {
         let program = parts[0];
         let args = &parts[1..];
 
-        let mut child = Command::new(program)
-            .args(args)
+        let mut cmd = Command::new(program);
+        cmd.args(args)
             .current_dir(cwd)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        // Set PORT env var if provided (for Node.js projects)
+        if let Some(p) = port {
+            cmd.env("PORT", p.to_string());
+        }
+
+        let mut child = cmd.spawn()?;
 
         // Setup output capture
         let stdout = child.stdout.take();

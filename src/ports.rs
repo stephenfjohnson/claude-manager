@@ -9,14 +9,23 @@ pub struct PortInfo {
     pub process_name: Option<String>,
 }
 
+/// Common dev server ports to scan
+const DEV_PORTS: &[u16] = &[
+    3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010,
+    4000, 4001, 4002, 4003, 4004, 4005, 4006, 4007, 4008, 4009, 4010,
+    5000, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010,
+    5173, 5174, 5175, // Vite default ports
+    8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007, 8008, 8009, 8010,
+    8080, 9000,
+];
+
+/// Find the next available port from the common dev server ports
+pub fn find_available_port() -> Option<u16> {
+    DEV_PORTS.iter().find(|&&port| !is_port_open(port)).copied()
+}
+
 pub fn scan_ports() -> Vec<PortInfo> {
-    let ports_to_check: Vec<u16> = (3000..=3010)
-        .chain(4000..=4010)
-        .chain(5000..=5010)
-        .chain(8000..=8010)
-        .chain(std::iter::once(8080))
-        .chain(std::iter::once(9000))
-        .collect();
+    let ports_to_check: Vec<u16> = DEV_PORTS.to_vec();
 
     let mut results = Vec::new();
 
