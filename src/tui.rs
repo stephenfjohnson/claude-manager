@@ -32,6 +32,10 @@ impl Tui {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         if key.code == KeyCode::Char('q') && !app.is_input_mode() {
+                            // Stop all running processes before quitting
+                            for project_id in app.process_manager.running_projects() {
+                                let _ = app.process_manager.stop(project_id);
+                            }
                             break;
                         }
                         app.handle_key(key.code);

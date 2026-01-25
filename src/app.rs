@@ -23,6 +23,7 @@ enum InputMode {
     AddName,
     AddUrl,
     SetPath,
+    EditRunCmd,
 }
 
 pub struct App {
@@ -38,6 +39,7 @@ pub struct App {
     name_input: InputDialog,
     url_input: InputDialog,
     path_input: InputDialog,
+    run_cmd_input: InputDialog,
     pending_name: Option<String>,
     // Process management
     pub process_manager: ProcessManager,
@@ -67,6 +69,7 @@ impl App {
             name_input: InputDialog::new("Project Name"),
             url_input: InputDialog::new("GitHub URL"),
             path_input: InputDialog::new("Local Path"),
+            run_cmd_input: InputDialog::new("Run Command"),
             pending_name: None,
             process_manager: ProcessManager::new(),
             show_logs: true,
@@ -119,6 +122,15 @@ impl App {
                     self.input_mode = InputMode::Normal;
                 }
             }
+            InputMode::EditRunCmd => {
+                if let Some(cmd) = self.run_cmd_input.handle_key(key) {
+                    self.set_run_command(if cmd.is_empty() { None } else { Some(&cmd) });
+                    self.input_mode = InputMode::Normal;
+                }
+                if !self.run_cmd_input.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
         }
     }
 
@@ -139,6 +151,14 @@ impl App {
             KeyCode::Char('d') => self.delete_selected(),
             KeyCode::Char('r') => self.run_selected(),
             KeyCode::Char('s') => self.stop_selected(),
+            KeyCode::Char('e') => {
+                if self.selected_location.is_some() {
+                    self.run_cmd_input.show();
+                    self.input_mode = InputMode::EditRunCmd;
+                }
+            }
+            KeyCode::F(5) => self.full_refresh(),
+            KeyCode::Enter => self.update_selected_details(),
             _ => {}
         }
     }
@@ -171,6 +191,39 @@ impl App {
                 self.update_selected_details();
             }
         }
+    }
+
+    fn set_run_command(&mut self, cmd: Option<&str>) {
+        if let Some(project) = self.selected_project() {
+            let project_id = project.id;
+            let project_name = project.name.clone();
+            if self
+                .db
+                .set_run_command(project_id, &self.machine_id, cmd)
+                .is_ok()
+            {
+                let _ = sync::push(&format!(
+                    "Set run command for {} on {}",
+                    project_name, self.machine_id
+                ));
+                self.update_selected_details();
+            }
+        }
+    }
+
+    fn full_refresh(&mut self) {
+        // Pull latest from GitHub
+        let _ = sync::pull();
+
+        // Reload projects
+        self.projects = self.db.list_projects().unwrap_or_default();
+
+        // Refresh port scan
+        self.port_info = ports::scan_ports();
+        self.last_port_scan = std::time::Instant::now();
+
+        // Update selected details
+        self.update_selected_details();
     }
 
     fn delete_selected(&mut self) {
@@ -339,6 +392,7 @@ impl App {
         self.name_input.render(frame, area);
         self.url_input.render(frame, area);
         self.path_input.render(frame, area);
+        self.run_cmd_input.render(frame, area);
     }
 
     fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
@@ -401,7 +455,7 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let help_text = " [a]dd  [p]ath  [r]un  [s]top  [d]elete  [q]uit ";
+        let help_text = " [a]dd  [p]ath  [e]dit cmd  [r]un  [s]top  [d]elete  [F5]refresh  [q]uit ";
         let machine_text = format!(" Machine: {} ", self.machine_id);
 
         let help = Paragraph::new(Line::from(vec![
