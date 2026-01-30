@@ -11,9 +11,6 @@ pub struct Project {
 
 #[derive(Debug, Clone)]
 pub struct MachineLocation {
-    pub id: i64,
-    pub project_id: i64,
-    pub machine_id: String,
     pub path: String,
     pub run_command: Option<String>,
 }
@@ -111,9 +108,6 @@ impl Database {
 
         if let Some(row) = rows.next()? {
             Ok(Some(MachineLocation {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                machine_id: row.get(2)?,
                 path: row.get(3)?,
                 run_command: row.get(4)?,
             }))
@@ -122,24 +116,6 @@ impl Database {
         }
     }
 
-    pub fn get_all_locations(&self, project_id: i64) -> Result<Vec<MachineLocation>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, machine_id, path, run_command
-             FROM machine_locations WHERE project_id = ?1",
-        )?;
-
-        let locs = stmt.query_map(params![project_id], |row| {
-            Ok(MachineLocation {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                machine_id: row.get(2)?,
-                path: row.get(3)?,
-                run_command: row.get(4)?,
-            })
-        })?;
-
-        locs.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
 }
 
 #[cfg(test)]

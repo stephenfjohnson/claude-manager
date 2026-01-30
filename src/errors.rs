@@ -4,7 +4,6 @@ use std::fmt;
 pub enum AppError {
     NotInitialized,
     GhNotAuthenticated,
-    SyncFailed(String),
     DatabaseError(String),
     IoError(std::io::Error),
 }
@@ -14,7 +13,6 @@ impl fmt::Display for AppError {
         match self {
             AppError::NotInitialized => write!(f, "Run 'claude-manager --init' first"),
             AppError::GhNotAuthenticated => write!(f, "Run 'gh auth login' first"),
-            AppError::SyncFailed(msg) => write!(f, "Sync failed: {}", msg),
             AppError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
             AppError::IoError(e) => write!(f, "IO error: {}", e),
         }

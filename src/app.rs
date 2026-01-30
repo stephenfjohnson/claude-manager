@@ -24,8 +24,6 @@ enum InputMode {
     #[default]
     Normal,
     SelectRepo,
-    AddName,
-    AddUrl,
     SetPath,
     EditRunCmd,
     ImportPath,
@@ -43,14 +41,11 @@ pub struct App {
     pub selected_git_status: Option<GitStatus>,
     // Input dialogs
     input_mode: InputMode,
-    name_input: InputDialog,
-    url_input: InputDialog,
     path_input: InputDialog,
     run_cmd_input: InputDialog,
     import_path_input: InputDialog,
     install_dir_input: InputDialog,
     repo_selector: RepoSelector,
-    pending_name: Option<String>,
     // Process management
     pub process_manager: ProcessManager,
     show_logs: bool,
@@ -82,14 +77,11 @@ impl App {
             selected_detection: None,
             selected_git_status: None,
             input_mode: InputMode::Normal,
-            name_input: InputDialog::new("Project Name"),
-            url_input: InputDialog::new("GitHub URL"),
             path_input: InputDialog::new("Local Path"),
             run_cmd_input: InputDialog::new("Run Command"),
             import_path_input: InputDialog::new("Import Path"),
             install_dir_input: InputDialog::new("Install Directory"),
             repo_selector: RepoSelector::new(),
-            pending_name: None,
             process_manager: ProcessManager::new(),
             show_logs: true,
             port_info: ports::scan_ports(),
@@ -118,34 +110,6 @@ impl App {
                 }
                 if !self.repo_selector.visible {
                     self.input_mode = InputMode::Normal;
-                }
-            }
-            InputMode::AddName => {
-                if let Some(name) = self.name_input.handle_key(key) {
-                    if !name.is_empty() {
-                        self.pending_name = Some(name);
-                        self.url_input.show();
-                        self.input_mode = InputMode::AddUrl;
-                    } else {
-                        self.input_mode = InputMode::Normal;
-                    }
-                }
-                if !self.name_input.visible {
-                    self.input_mode = InputMode::Normal;
-                }
-            }
-            InputMode::AddUrl => {
-                if let Some(url) = self.url_input.handle_key(key) {
-                    if let Some(name) = self.pending_name.take() {
-                        if !url.is_empty() {
-                            self.add_project(&name, &url);
-                        }
-                    }
-                    self.input_mode = InputMode::Normal;
-                }
-                if !self.url_input.visible {
-                    self.input_mode = InputMode::Normal;
-                    self.pending_name = None;
                 }
             }
             InputMode::SetPath => {
@@ -203,8 +167,6 @@ impl App {
 
     pub fn handle_paste(&mut self, text: &str) {
         match self.input_mode {
-            InputMode::AddName => self.name_input.value.push_str(text),
-            InputMode::AddUrl => self.url_input.value.push_str(text),
             InputMode::SetPath => self.path_input.value.push_str(text),
             InputMode::EditRunCmd => self.run_cmd_input.value.push_str(text),
             InputMode::ImportPath => self.import_path_input.value.push_str(text),
@@ -712,8 +674,6 @@ impl App {
 
         // Render input dialogs on top
         let area = frame.area();
-        self.name_input.render(frame, area);
-        self.url_input.render(frame, area);
         self.path_input.render(frame, area);
         self.run_cmd_input.render(frame, area);
         self.import_path_input.render(frame, area);
