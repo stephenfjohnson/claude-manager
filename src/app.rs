@@ -28,6 +28,7 @@ enum InputMode {
     EditRunCmd,
     ImportPath,
     SetInstallDir,
+    ClonePath,
     ConfirmQuit,
 }
 
@@ -45,6 +46,7 @@ pub struct App {
     run_cmd_input: InputDialog,
     import_path_input: InputDialog,
     install_dir_input: InputDialog,
+    clone_path_input: InputDialog,
     repo_selector: RepoSelector,
     // Process management
     pub process_manager: ProcessManager,
@@ -81,6 +83,7 @@ impl App {
             run_cmd_input: InputDialog::new("Run Command"),
             import_path_input: InputDialog::new("Import Path"),
             install_dir_input: InputDialog::new("Install Directory"),
+            clone_path_input: InputDialog::new("Clone to Directory"),
             repo_selector: RepoSelector::new(),
             process_manager: ProcessManager::new(),
             show_logs: true,
@@ -153,6 +156,26 @@ impl App {
                     self.input_mode = InputMode::Normal;
                 }
             }
+            InputMode::ClonePath => {
+                if let Some(dir) = self.clone_path_input.handle_key(key) {
+                    if !dir.is_empty() {
+                        let path = if dir.starts_with("~/") {
+                            if let Some(home) = dirs::home_dir() {
+                                home.join(&dir[2..])
+                            } else {
+                                std::path::PathBuf::from(&dir)
+                            }
+                        } else {
+                            std::path::PathBuf::from(&dir)
+                        };
+                        self.clone_selected_to(path);
+                    }
+                    self.input_mode = InputMode::Normal;
+                }
+                if !self.clone_path_input.visible {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
             InputMode::ConfirmQuit => match key {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.should_quit = true;
@@ -171,6 +194,7 @@ impl App {
             InputMode::EditRunCmd => self.run_cmd_input.value.push_str(text),
             InputMode::ImportPath => self.import_path_input.value.push_str(text),
             InputMode::SetInstallDir => self.install_dir_input.value.push_str(text),
+            InputMode::ClonePath => self.clone_path_input.value.push_str(text),
             _ => {}
         }
     }
@@ -212,6 +236,21 @@ impl App {
                 }
                 self.install_dir_input.show();
                 self.input_mode = InputMode::SetInstallDir;
+            }
+            KeyCode::Char('g') => {
+                // Clone repo for selected project (only when path not set)
+                if let Some(project) = self.selected_project() {
+                    if self.selected_location.is_none() && !project.repo_url.is_empty() {
+                        if let Some(install_dir) = self.config.get_install_dir() {
+                            // Clone directly to install_dir
+                            self.clone_selected_to(install_dir);
+                        } else {
+                            // Prompt for directory
+                            self.clone_path_input.show();
+                            self.input_mode = InputMode::ClonePath;
+                        }
+                    }
+                }
             }
             KeyCode::F(5) => self.full_refresh(),
             KeyCode::Enter => self.update_selected_details(),
@@ -282,6 +321,36 @@ impl App {
                     project_name, self.machine_id
                 ));
                 self.update_selected_details();
+            }
+        }
+    }
+
+    fn clone_selected_to(&mut self, base_dir: std::path::PathBuf) {
+        if let Some(project) = self.selected_project() {
+            let project_id = project.id;
+            let project_name = project.name.clone();
+            let repo_url = project.repo_url.clone();
+
+            if repo_url.is_empty() {
+                return;
+            }
+
+            let dest = base_dir.join(&project_name);
+            if self.clone_repo(&repo_url, &dest) {
+                // Set the location for this machine
+                if let Some(dest_str) = dest.to_str() {
+                    if self
+                        .db
+                        .set_location(project_id, &self.machine_id, dest_str)
+                        .is_ok()
+                    {
+                        let _ = sync::push(&format!(
+                            "Cloned {} to {} on {}",
+                            project_name, dest_str, self.machine_id
+                        ));
+                        self.update_selected_details();
+                    }
+                }
             }
         }
     }
@@ -678,6 +747,7 @@ impl App {
         self.run_cmd_input.render(frame, area);
         self.import_path_input.render(frame, area);
         self.install_dir_input.render(frame, area);
+        self.clone_path_input.render(frame, area);
         self.repo_selector.render(frame, area);
 
         // Render quit confirmation dialog
@@ -770,7 +840,7 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let help_text = " [a]dd  [i]mport  [p]ath  [e]dit  [r]un  [s]top  [d]el  [c]fg  [F5]  [q]uit ";
+        let help_text = " [a]dd  [i]mport  [p]ath  [g]it  [e]dit  [r]un  [s]top  [d]el  [c]fg  [F5]  [q]uit ";
         let machine_text = format!(" Machine: {} ", self.machine_id);
 
         let help = Paragraph::new(Line::from(vec![
@@ -900,8 +970,14 @@ impl App {
                     "Path not set on this machine",
                     Style::default().fg(Color::Red),
                 )));
+                if !project.repo_url.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "Press 'g' to clone from repo",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
                 lines.push(Line::from(Span::styled(
-                    "Press 'p' to set path",
+                    "Press 'p' to set path manually",
                     Style::default().fg(Color::DarkGray),
                 )));
             }
