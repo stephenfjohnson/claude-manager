@@ -517,6 +517,22 @@ impl App {
         };
 
         // Run install and wait for completion
+        // On Windows, npm/pnpm/yarn/bun are .cmd files, must run through cmd.exe
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let _ = Command::new("cmd.exe")
+                .args(["/c", install_cmd, "install"])
+                .current_dir(path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+        }
+
+        #[cfg(not(windows))]
         let _ = Command::new(install_cmd)
             .arg("install")
             .current_dir(path)
