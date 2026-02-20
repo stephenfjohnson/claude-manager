@@ -490,7 +490,7 @@ impl App {
                 return;
             }
 
-            let project_id = idx as i64;
+            let project_name = project.name.clone();
             let run_command_override = project.run_command.clone();
 
             // Git fetch before running (blocking)
@@ -505,7 +505,7 @@ impl App {
             self.spawn_terminal_with_claude(path);
 
             // Also start any dev server in background if not already running
-            if !self.process_manager.is_running(project_id) {
+            if !self.process_manager.is_running(&project_name) {
                 let cmd = run_command_override
                     .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
 
@@ -517,7 +517,7 @@ impl App {
                         None
                     };
 
-                    let _ = self.process_manager.start_with_port(project_id, path, &cmd, port);
+                    let _ = self.process_manager.start_with_port(&project_name, path, &cmd, port);
                 }
             }
         }
@@ -677,9 +677,9 @@ impl App {
     }
 
     fn stop_selected(&mut self) {
-        if let Some(idx) = self.list_state.selected() {
-            let project_id = idx as i64;
-            let _ = self.process_manager.stop(project_id);
+        if let Some(project) = self.selected_project() {
+            let name = project.name.clone();
+            let _ = self.process_manager.stop(&name);
         }
     }
 
@@ -830,13 +830,12 @@ impl App {
     }
 
     fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
-        let project_id = self.list_state.selected().map(|idx| idx as i64);
         let project_name = self.selected_project().map(|p| p.name.clone());
 
-        let (title, lines) = if let Some(id) = project_id {
-            if self.process_manager.is_running(id) {
-                let output = self.process_manager.get_output(id);
-                let title = format!(" Logs ({}) ", project_name.unwrap_or_default());
+        let (title, lines) = if let Some(ref name) = project_name {
+            if self.process_manager.is_running(name) {
+                let output = self.process_manager.get_output(name);
+                let title = format!(" Logs ({}) ", name);
                 (title, output)
             } else {
                 (" Logs ".to_string(), vec!["No process running".to_string()])
@@ -912,10 +911,9 @@ impl App {
             .store
             .projects
             .iter()
-            .enumerate()
-            .map(|(idx, p)| {
+            .map(|p| {
                 let has_path = !p.path.is_empty() && Path::new(&p.path).exists();
-                let is_running = self.process_manager.is_running(idx as i64);
+                let is_running = self.process_manager.is_running(&p.name);
 
                 let status = if is_running {
                     Span::styled(" * ", Style::default().fg(Color::Green))

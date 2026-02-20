@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct ProcessManager {
-    processes: HashMap<i64, Child>,
-    output_buffers: Arc<Mutex<HashMap<i64, Vec<String>>>>,
+    processes: HashMap<String, Child>,
+    output_buffers: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
 impl ProcessManager {
@@ -20,13 +20,13 @@ impl ProcessManager {
     }
 
     #[allow(dead_code)]
-    pub fn start(&mut self, project_id: i64, cwd: &Path, command: &str) -> Result<()> {
-        self.start_with_port(project_id, cwd, command, None)
+    pub fn start(&mut self, project_name: &str, cwd: &Path, command: &str) -> Result<()> {
+        self.start_with_port(project_name, cwd, command, None)
     }
 
     pub fn start_with_port(
         &mut self,
-        project_id: i64,
+        project_name: &str,
         cwd: &Path,
         command: &str,
         port: Option<u16>,
@@ -78,19 +78,22 @@ impl ProcessManager {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
+        let key = project_name.to_string();
+
         {
             let mut buffers = self.output_buffers.lock().unwrap();
-            buffers.insert(project_id, Vec::new());
+            buffers.insert(key.clone(), Vec::new());
         }
 
         // Spawn threads to capture output
         if let Some(stdout) = stdout {
             let buffers = Arc::clone(&self.output_buffers);
+            let key = key.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines().map_while(Result::ok) {
                     if let Ok(mut buffers) = buffers.lock() {
-                        if let Some(buf) = buffers.get_mut(&project_id) {
+                        if let Some(buf) = buffers.get_mut(&key) {
                             buf.push(line);
                             // Keep last 1000 lines
                             if buf.len() > 1000 {
@@ -104,11 +107,12 @@ impl ProcessManager {
 
         if let Some(stderr) = stderr {
             let buffers = Arc::clone(&self.output_buffers);
+            let key = key.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
                     if let Ok(mut buffers) = buffers.lock() {
-                        if let Some(buf) = buffers.get_mut(&project_id) {
+                        if let Some(buf) = buffers.get_mut(&key) {
                             buf.push(format!("[stderr] {}", line));
                             if buf.len() > 1000 {
                                 buf.remove(0);
@@ -119,12 +123,12 @@ impl ProcessManager {
             });
         }
 
-        self.processes.insert(project_id, child);
+        self.processes.insert(key, child);
         Ok(())
     }
 
-    pub fn stop(&mut self, project_id: i64) -> Result<()> {
-        if let Some(mut child) = self.processes.remove(&project_id) {
+    pub fn stop(&mut self, project_name: &str) -> Result<()> {
+        if let Some(mut child) = self.processes.remove(project_name) {
             // Try graceful shutdown first
             #[cfg(unix)]
             {
@@ -145,18 +149,18 @@ impl ProcessManager {
 
         // Clean up buffer
         if let Ok(mut buffers) = self.output_buffers.lock() {
-            buffers.remove(&project_id);
+            buffers.remove(project_name);
         }
 
         Ok(())
     }
 
-    pub fn is_running(&mut self, project_id: i64) -> bool {
-        if let Some(child) = self.processes.get_mut(&project_id) {
+    pub fn is_running(&mut self, project_name: &str) -> bool {
+        if let Some(child) = self.processes.get_mut(project_name) {
             match child.try_wait() {
                 Ok(Some(_)) => {
                     // Process exited, remove it
-                    self.processes.remove(&project_id);
+                    self.processes.remove(project_name);
                     false
                 }
                 Ok(None) => true,
@@ -167,15 +171,15 @@ impl ProcessManager {
         }
     }
 
-    pub fn get_output(&self, project_id: i64) -> Vec<String> {
+    pub fn get_output(&self, project_name: &str) -> Vec<String> {
         if let Ok(buffers) = self.output_buffers.lock() {
-            buffers.get(&project_id).cloned().unwrap_or_default()
+            buffers.get(project_name).cloned().unwrap_or_default()
         } else {
             Vec::new()
         }
     }
 
-    pub fn running_projects(&self) -> Vec<i64> {
+    pub fn running_projects(&self) -> Vec<String> {
         self.processes.keys().cloned().collect()
     }
 }
@@ -202,12 +206,12 @@ mod tests {
         #[cfg(not(windows))]
         let command = "echo hello from dev server";
 
-        pm.start(1, &cwd, command).expect("Failed to start process");
+        pm.start("test-project", &cwd, command).expect("Failed to start process");
 
         // Give it a moment to produce output
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        let output = pm.get_output(1);
+        let output = pm.get_output("test-project");
         assert!(
             !output.is_empty(),
             "Expected output from process, got nothing"
@@ -227,12 +231,12 @@ mod tests {
 
         // npm --version should work through cmd.exe /c
         // This verifies .cmd file resolution works
-        pm.start(2, &cwd, "npm --version")
+        pm.start("npm-test", &cwd, "npm --version")
             .expect("Failed to start npm via cmd.exe");
 
         std::thread::sleep(std::time::Duration::from_millis(2000));
 
-        let output = pm.get_output(2);
+        let output = pm.get_output("npm-test");
         assert!(
             !output.is_empty(),
             "npm --version produced no output - cmd.exe /c is not resolving .cmd files"
@@ -256,14 +260,14 @@ mod tests {
         #[cfg(not(windows))]
         let command = "sleep 60";
 
-        pm.start(3, &cwd, command).expect("Failed to start process");
+        pm.start("long-running", &cwd, command).expect("Failed to start process");
 
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        assert!(pm.is_running(3), "Process should be running");
+        assert!(pm.is_running("long-running"), "Process should be running");
 
-        pm.stop(3).expect("Failed to stop process");
+        pm.stop("long-running").expect("Failed to stop process");
 
-        assert!(!pm.is_running(3), "Process should be stopped");
+        assert!(!pm.is_running("long-running"), "Process should be stopped");
     }
 }

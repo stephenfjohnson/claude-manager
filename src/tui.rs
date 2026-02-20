@@ -34,8 +34,8 @@ impl Tui {
             // Check if app wants to quit
             if app.should_quit() {
                 // Stop all running processes before quitting
-                for project_id in app.process_manager.running_projects() {
-                    let _ = app.process_manager.stop(project_id);
+                for name in app.process_manager.running_projects() {
+                    let _ = app.process_manager.stop(&name);
                 }
                 break;
             }
