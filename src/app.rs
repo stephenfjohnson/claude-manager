@@ -8,14 +8,13 @@ use ratatui::{
 };
 use std::path::Path;
 
-use crate::config::MachineConfig;
-use crate::db::{Database, MachineLocation, Project};
 use crate::detect;
 use crate::gh;
 use crate::git_status::{self, GitStatus};
 use crate::ports::{self, PortInfo};
 use crate::process::ProcessManager;
-use crate::sync;
+use crate::scanner;
+use crate::store::{ProjectEntry, ProjectStore};
 use crate::ui::input::InputDialog;
 use crate::ui::selector::RepoSelector;
 
@@ -24,7 +23,7 @@ enum InputMode {
     #[default]
     Normal,
     SelectRepo,
-    SetPath,
+    SelectScan,
     EditRunCmd,
     ImportPath,
     SetInstallDir,
@@ -33,63 +32,54 @@ enum InputMode {
 }
 
 pub struct App {
-    pub projects: Vec<Project>,
-    pub machine_id: String,
-    pub db: Database,
+    pub store: ProjectStore,
     pub list_state: ListState,
-    pub selected_location: Option<MachineLocation>,
     pub selected_detection: Option<detect::DetectedProject>,
     pub selected_git_status: Option<GitStatus>,
     // Input dialogs
     input_mode: InputMode,
-    path_input: InputDialog,
     run_cmd_input: InputDialog,
     import_path_input: InputDialog,
     install_dir_input: InputDialog,
     clone_path_input: InputDialog,
     repo_selector: RepoSelector,
+    scan_selector: RepoSelector,
     // Process management
     pub process_manager: ProcessManager,
     show_logs: bool,
     // Port scanning
     pub port_info: Vec<PortInfo>,
     last_port_scan: std::time::Instant,
-    // Machine config
-    pub config: MachineConfig,
+    // GitHub availability
+    pub gh_available: bool,
     // Quit state
     should_quit: bool,
 }
 
 impl App {
-    pub fn new(db: Database, machine_id: String) -> anyhow::Result<Self> {
-        let projects = db.list_projects()?;
+    pub fn new(store: ProjectStore, gh_available: bool) -> anyhow::Result<Self> {
         let mut list_state = ListState::default();
-        if !projects.is_empty() {
+        if !store.projects.is_empty() {
             list_state.select(Some(0));
         }
 
-        let config = MachineConfig::load().unwrap_or_default();
-
         let mut app = Self {
-            projects,
-            machine_id,
-            db,
+            store,
             list_state,
-            selected_location: None,
             selected_detection: None,
             selected_git_status: None,
             input_mode: InputMode::Normal,
-            path_input: InputDialog::new("Local Path"),
             run_cmd_input: InputDialog::new("Run Command"),
             import_path_input: InputDialog::new("Import Path"),
             install_dir_input: InputDialog::new("Install Directory"),
             clone_path_input: InputDialog::new("Clone to Directory"),
             repo_selector: RepoSelector::new(),
+            scan_selector: RepoSelector::new(),
             process_manager: ProcessManager::new(),
             show_logs: true,
             port_info: ports::scan_ports(),
             last_port_scan: std::time::Instant::now(),
-            config,
+            gh_available,
             should_quit: false,
         };
         app.update_selected_details();
@@ -109,20 +99,46 @@ impl App {
             InputMode::Normal => self.handle_normal_key(key),
             InputMode::SelectRepo => {
                 if let Some((name, url)) = self.repo_selector.handle_key(key) {
-                    self.add_project(&name, &url);
+                    self.add_from_github(&name, &url);
                 }
                 if !self.repo_selector.visible {
                     self.input_mode = InputMode::Normal;
                 }
             }
-            InputMode::SetPath => {
-                if let Some(path) = self.path_input.handle_key(key) {
-                    if !path.is_empty() {
-                        self.set_path(&path);
+            InputMode::SelectScan => {
+                if let Some((_display, data)) = self.scan_selector.handle_key(key) {
+                    // data is "path\nremote_url"
+                    let mut parts = data.splitn(2, '\n');
+                    let path = parts.next().unwrap_or("").to_string();
+                    let remote_url = parts.next().unwrap_or("").to_string();
+                    let remote_opt = if remote_url.is_empty() {
+                        None
+                    } else {
+                        Some(remote_url)
+                    };
+
+                    // Derive name from path
+                    let name = Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    self.store.add(ProjectEntry {
+                        name: name.clone(),
+                        repo_url: remote_opt,
+                        path,
+                        run_command: None,
+                    });
+                    let _ = self.store.save();
+
+                    // Select the newly added project
+                    if let Some(idx) = self.store.projects.iter().position(|p| p.name == name) {
+                        self.list_state.select(Some(idx));
                     }
-                    self.input_mode = InputMode::Normal;
+                    self.update_selected_details();
                 }
-                if !self.path_input.visible {
+                if !self.scan_selector.visible {
                     self.input_mode = InputMode::Normal;
                 }
             }
@@ -148,8 +164,8 @@ impl App {
             }
             InputMode::SetInstallDir => {
                 if let Some(dir) = self.install_dir_input.handle_key(key) {
-                    let dir_opt = if dir.is_empty() { None } else { Some(dir) };
-                    let _ = self.config.set_install_dir(dir_opt);
+                    self.store.install_dir = if dir.is_empty() { None } else { Some(dir) };
+                    let _ = self.store.save();
                     self.input_mode = InputMode::Normal;
                 }
                 if !self.install_dir_input.visible {
@@ -190,7 +206,6 @@ impl App {
 
     pub fn handle_paste(&mut self, text: &str) {
         match self.input_mode {
-            InputMode::SetPath => self.path_input.value.push_str(text),
             InputMode::EditRunCmd => self.run_cmd_input.value.push_str(text),
             InputMode::ImportPath => self.import_path_input.value.push_str(text),
             InputMode::SetInstallDir => self.install_dir_input.value.push_str(text),
@@ -204,25 +219,25 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.next(),
             KeyCode::Char('a') => {
-                // Fetch repos from GitHub and show selector
-                if let Ok(repos) = gh::list_repos() {
-                    self.repo_selector.show(repos);
-                    self.input_mode = InputMode::SelectRepo;
+                if self.gh_available {
+                    if let Ok(repos) = gh::list_repos() {
+                        self.repo_selector.show(repos);
+                        self.input_mode = InputMode::SelectRepo;
+                    }
                 }
             }
-            KeyCode::Char('p') => {
-                if self.selected_project().is_some() {
-                    self.path_input.show();
-                    self.input_mode = InputMode::SetPath;
-                }
-            }
+            KeyCode::Char('s') => self.scan_for_projects(),
             KeyCode::Char('d') => self.delete_selected(),
             KeyCode::Char('r') => self.run_selected(),
-            KeyCode::Char('s') => self.stop_selected(),
+            KeyCode::Char('x') => self.stop_selected(),
             KeyCode::Char('e') => {
-                if self.selected_location.is_some() {
-                    self.run_cmd_input.show();
-                    self.input_mode = InputMode::EditRunCmd;
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(project) = self.store.projects.get(idx) {
+                        if !project.path.is_empty() && Path::new(&project.path).exists() {
+                            self.run_cmd_input.show();
+                            self.input_mode = InputMode::EditRunCmd;
+                        }
+                    }
                 }
             }
             KeyCode::Char('i') => {
@@ -230,24 +245,24 @@ impl App {
                 self.input_mode = InputMode::ImportPath;
             }
             KeyCode::Char('c') => {
-                // Prefill with current value
-                if let Some(ref dir) = self.config.install_dir {
+                if let Some(ref dir) = self.store.install_dir {
                     self.install_dir_input.set_value(dir);
                 }
                 self.install_dir_input.show();
                 self.input_mode = InputMode::SetInstallDir;
             }
             KeyCode::Char('g') => {
-                // Clone repo for selected project (only when path not set)
-                if let Some(project) = self.selected_project() {
-                    if self.selected_location.is_none() && !project.repo_url.is_empty() {
-                        if let Some(install_dir) = self.config.get_install_dir() {
-                            // Clone directly to install_dir
-                            self.clone_selected_to(install_dir);
-                        } else {
-                            // Prompt for directory
-                            self.clone_path_input.show();
-                            self.input_mode = InputMode::ClonePath;
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(project) = self.store.projects.get(idx) {
+                        let path_empty = project.path.is_empty() || !Path::new(&project.path).exists();
+                        let has_repo = project.repo_url.is_some();
+                        if path_empty && has_repo {
+                            if let Some(install_dir) = self.store.get_install_dir() {
+                                self.clone_selected_to(install_dir);
+                            } else {
+                                self.clone_path_input.show();
+                                self.input_mode = InputMode::ClonePath;
+                            }
                         }
                     }
                 }
@@ -258,31 +273,42 @@ impl App {
         }
     }
 
-    fn add_project(&mut self, name: &str, url: &str) {
-        if let Ok(id) = self.db.add_project(name, url) {
-            // Clone to install directory if configured
-            if let Some(install_dir) = self.config.get_install_dir() {
-                if !url.is_empty() {
-                    let dest = install_dir.join(name);
-                    if self.clone_repo(url, &dest) {
-                        // Set the location for this machine
-                        let _ = self.db.set_location(
-                            id,
-                            &self.machine_id,
-                            dest.to_str().unwrap_or(""),
-                        );
-                    }
+    fn add_from_github(&mut self, name: &str, url: &str) {
+        // Determine path: clone to install_dir if configured
+        let path = if let Some(install_dir) = self.store.get_install_dir() {
+            if !url.is_empty() {
+                let dest = install_dir.join(name);
+                if self.clone_repo(url, &dest) {
+                    dest.to_str().unwrap_or("").to_string()
+                } else {
+                    String::new()
                 }
+            } else {
+                String::new()
             }
+        } else {
+            String::new()
+        };
 
-            let _ = sync::push(&format!("Add project: {}", name));
-            self.projects = self.db.list_projects().unwrap_or_default();
-            // Select the new project
-            if let Some(idx) = self.projects.iter().position(|p| p.id == id) {
-                self.list_state.select(Some(idx));
-            }
-            self.update_selected_details();
+        let repo_url = if url.is_empty() {
+            None
+        } else {
+            Some(url.to_string())
+        };
+
+        self.store.add(ProjectEntry {
+            name: name.to_string(),
+            repo_url,
+            path,
+            run_command: None,
+        });
+        let _ = self.store.save();
+
+        // Select the new project
+        if let Some(idx) = self.store.projects.iter().position(|p| p.name == name) {
+            self.list_state.select(Some(idx));
         }
+        self.update_selected_details();
     }
 
     fn clone_repo(&self, url: &str, dest: &Path) -> bool {
@@ -307,69 +333,44 @@ impl App {
             .unwrap_or(false)
     }
 
-    fn set_path(&mut self, path: &str) {
-        if let Some(project) = self.selected_project() {
-            let project_id = project.id;
-            let project_name = project.name.clone();
-            if self
-                .db
-                .set_location(project_id, &self.machine_id, path)
-                .is_ok()
-            {
-                let _ = sync::push(&format!(
-                    "Set path for {} on {}",
-                    project_name, self.machine_id
-                ));
-                self.update_selected_details();
-            }
-        }
-    }
-
     fn clone_selected_to(&mut self, base_dir: std::path::PathBuf) {
-        if let Some(project) = self.selected_project() {
-            let project_id = project.id;
-            let project_name = project.name.clone();
-            let repo_url = project.repo_url.clone();
+        if let Some(idx) = self.list_state.selected() {
+            let (name, repo_url) = {
+                let project = match self.store.projects.get(idx) {
+                    Some(p) => p,
+                    None => return,
+                };
+                let repo_url = match &project.repo_url {
+                    Some(u) => u.clone(),
+                    None => return,
+                };
+                (project.name.clone(), repo_url)
+            };
 
-            if repo_url.is_empty() {
-                return;
-            }
-
-            let dest = base_dir.join(&project_name);
+            let dest = base_dir.join(&name);
             if self.clone_repo(&repo_url, &dest) {
-                // Set the location for this machine
                 if let Some(dest_str) = dest.to_str() {
-                    if self
-                        .db
-                        .set_location(project_id, &self.machine_id, dest_str)
-                        .is_ok()
-                    {
-                        let _ = sync::push(&format!(
-                            "Cloned {} to {} on {}",
-                            project_name, dest_str, self.machine_id
-                        ));
-                        self.update_selected_details();
+                    if let Some(project) = self.store.get_mut(&name) {
+                        project.path = dest_str.to_string();
                     }
+                    let _ = self.store.save();
+                    self.update_selected_details();
                 }
             }
         }
     }
 
     fn set_run_command(&mut self, cmd: Option<&str>) {
-        if let Some(project) = self.selected_project() {
-            let project_id = project.id;
-            let project_name = project.name.clone();
-            if self
-                .db
-                .set_run_command(project_id, &self.machine_id, cmd)
-                .is_ok()
-            {
-                let _ = sync::push(&format!(
-                    "Set run command for {} on {}",
-                    project_name, self.machine_id
-                ));
-                self.update_selected_details();
+        if let Some(idx) = self.list_state.selected() {
+            let name = match self.store.projects.get(idx) {
+                Some(p) => p.name.clone(),
+                None => return,
+            };
+            if let Some(project) = self.store.get_mut(&name) {
+                project.run_command = cmd.map(|s| s.to_string());
             }
+            let _ = self.store.save();
+            self.update_selected_details();
         }
     }
 
@@ -395,29 +396,57 @@ impl App {
             .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
+            .filter(|s| !s.is_empty());
 
-        // Add project
-        if let Ok(id) = self.db.add_project(&name, &remote_url) {
-            // Set location
-            if self.db.set_location(id, &self.machine_id, path_str).is_ok() {
-                let _ = sync::push(&format!("Import project: {}", name));
-                self.projects = self.db.list_projects().unwrap_or_default();
-                // Select the new project
-                if let Some(idx) = self.projects.iter().position(|p| p.id == id) {
-                    self.list_state.select(Some(idx));
-                }
-                self.update_selected_details();
-            }
+        self.store.add(ProjectEntry {
+            name: name.clone(),
+            repo_url: remote_url,
+            path: path_str.to_string(),
+            run_command: None,
+        });
+        let _ = self.store.save();
+
+        // Select the new project
+        if let Some(idx) = self.store.projects.iter().position(|p| p.name == name) {
+            self.list_state.select(Some(idx));
         }
+        self.update_selected_details();
+    }
+
+    fn scan_for_projects(&mut self) {
+        let found = scanner::scan_directories();
+
+        // Filter out projects already in the store
+        let new_projects: Vec<_> = found
+            .into_iter()
+            .filter(|sp| self.store.get(&sp.name).is_none())
+            .collect();
+
+        if new_projects.is_empty() {
+            return;
+        }
+
+        // Build items for the scan selector
+        // display = "name (path)", data = "path\nremote_url"
+        let repos: Vec<(String, String)> = new_projects
+            .iter()
+            .map(|sp| {
+                let display = format!("{} ({})", sp.name, sp.path.display());
+                let remote = sp.remote_url.as_deref().unwrap_or("");
+                let data = format!("{}\n{}", sp.path.display(), remote);
+                (display, data)
+            })
+            .collect();
+
+        self.scan_selector.show(repos);
+        self.input_mode = InputMode::SelectScan;
     }
 
     fn full_refresh(&mut self) {
-        // Pull latest from GitHub
-        let _ = sync::pull();
-
-        // Reload projects
-        self.projects = self.db.list_projects().unwrap_or_default();
+        // Reload store from file
+        if let Ok(reloaded) = ProjectStore::load() {
+            self.store = reloaded;
+        }
 
         // Refresh port scan
         self.port_info = ports::scan_ports();
@@ -428,59 +457,67 @@ impl App {
     }
 
     fn delete_selected(&mut self) {
-        if let Some(project) = self.selected_project() {
-            let id = project.id;
-            let name = project.name.clone();
-            if self.db.delete_project(id).is_ok() {
-                let _ = sync::push(&format!("Delete project: {}", name));
-                self.projects = self.db.list_projects().unwrap_or_default();
-                if self.projects.is_empty() {
-                    self.list_state.select(None);
-                } else if let Some(idx) = self.list_state.selected() {
-                    if idx >= self.projects.len() {
-                        self.list_state.select(Some(self.projects.len() - 1));
-                    }
-                }
-                self.update_selected_details();
+        if let Some(idx) = self.list_state.selected() {
+            let name = match self.store.projects.get(idx) {
+                Some(p) => p.name.clone(),
+                None => return,
+            };
+            self.store.remove(&name);
+            let _ = self.store.save();
+
+            if self.store.projects.is_empty() {
+                self.list_state.select(None);
+            } else if idx >= self.store.projects.len() {
+                self.list_state.select(Some(self.store.projects.len() - 1));
             }
+            self.update_selected_details();
         }
     }
 
     fn run_selected(&mut self) {
-        if let Some(project) = self.selected_project() {
-            let project_id = project.id;
+        if let Some(idx) = self.list_state.selected() {
+            let project = match self.store.projects.get(idx) {
+                Some(p) => p,
+                None => return,
+            };
 
-            if let Some(ref loc) = self.selected_location {
-                let path = Path::new(&loc.path);
+            if project.path.is_empty() {
+                return;
+            }
 
-                // Git fetch before running (blocking)
-                self.git_fetch(path);
+            let path = Path::new(&project.path);
+            if !path.exists() {
+                return;
+            }
 
-                // Install dependencies for JS projects before starting dev server
-                if self.is_js_project() {
-                    self.install_node_modules(path);
-                }
+            let project_id = idx as i64;
+            let run_command_override = project.run_command.clone();
 
-                // Spawn a new terminal with claude
-                self.spawn_terminal_with_claude(path);
+            // Git fetch before running (blocking)
+            self.git_fetch(path);
 
-                // Also start any dev server in background if not already running
-                if !self.process_manager.is_running(project_id) {
-                    let cmd = loc
-                        .run_command
-                        .clone()
-                        .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
+            // Install dependencies for JS projects before starting dev server
+            if self.is_js_project() {
+                self.install_node_modules(path);
+            }
 
-                    if let Some(cmd) = cmd {
-                        // For JavaScript projects, find an available port
-                        let port = if self.is_js_project() {
-                            ports::find_available_port()
-                        } else {
-                            None
-                        };
+            // Spawn a new terminal with claude
+            self.spawn_terminal_with_claude(path);
 
-                        let _ = self.process_manager.start_with_port(project_id, path, &cmd, port);
-                    }
+            // Also start any dev server in background if not already running
+            if !self.process_manager.is_running(project_id) {
+                let cmd = run_command_override
+                    .or_else(|| self.selected_detection.as_ref().and_then(|d| d.run_command.clone()));
+
+                if let Some(cmd) = cmd {
+                    // For JavaScript projects, find an available port
+                    let port = if self.is_js_project() {
+                        ports::find_available_port()
+                    } else {
+                        None
+                    };
+
+                    let _ = self.process_manager.start_with_port(project_id, path, &cmd, port);
                 }
             }
         }
@@ -640,8 +677,9 @@ impl App {
     }
 
     fn stop_selected(&mut self) {
-        if let Some(project) = self.selected_project() {
-            let _ = self.process_manager.stop(project.id);
+        if let Some(idx) = self.list_state.selected() {
+            let project_id = idx as i64;
+            let _ = self.process_manager.stop(project_id);
         }
     }
 
@@ -650,11 +688,11 @@ impl App {
     }
 
     fn next(&mut self) {
-        if self.projects.is_empty() {
+        if self.store.projects.is_empty() {
             return;
         }
         let i = match self.list_state.selected() {
-            Some(i) => (i + 1) % self.projects.len(),
+            Some(i) => (i + 1) % self.store.projects.len(),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -662,13 +700,13 @@ impl App {
     }
 
     fn previous(&mut self) {
-        if self.projects.is_empty() {
+        if self.store.projects.is_empty() {
             return;
         }
         let i = match self.list_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.projects.len() - 1
+                    self.store.projects.len() - 1
                 } else {
                     i - 1
                 }
@@ -680,31 +718,26 @@ impl App {
     }
 
     fn update_selected_details(&mut self) {
-        self.selected_location = None;
         self.selected_detection = None;
         self.selected_git_status = None;
 
         if let Some(idx) = self.list_state.selected() {
-            if let Some(project) = self.projects.get(idx) {
-                self.selected_location = self
-                    .db
-                    .get_location(project.id, &self.machine_id)
-                    .ok()
-                    .flatten();
-
-                if let Some(ref loc) = self.selected_location {
-                    let path = Path::new(&loc.path);
-                    self.selected_detection = detect::detect(path).ok();
-                    self.selected_git_status = git_status::get_status(path).ok();
+            if let Some(project) = self.store.projects.get(idx) {
+                if !project.path.is_empty() {
+                    let path = Path::new(&project.path);
+                    if path.exists() {
+                        self.selected_detection = detect::detect(path).ok();
+                        self.selected_git_status = git_status::get_status(path).ok();
+                    }
                 }
             }
         }
     }
 
-    pub fn selected_project(&self) -> Option<&Project> {
+    fn selected_project(&self) -> Option<&ProjectEntry> {
         self.list_state
             .selected()
-            .and_then(|i| self.projects.get(i))
+            .and_then(|i| self.store.projects.get(i))
     }
 
     fn maybe_refresh_ports(&mut self) {
@@ -759,12 +792,12 @@ impl App {
 
         // Render input dialogs on top
         let area = frame.area();
-        self.path_input.render(frame, area);
         self.run_cmd_input.render(frame, area);
         self.import_path_input.render(frame, area);
         self.install_dir_input.render(frame, area);
         self.clone_path_input.render(frame, area);
         self.repo_selector.render(frame, area);
+        self.scan_selector.render(frame, area);
 
         // Render quit confirmation dialog
         if self.input_mode == InputMode::ConfirmQuit {
@@ -797,7 +830,7 @@ impl App {
     }
 
     fn render_logs(&mut self, frame: &mut Frame, area: Rect) {
-        let project_id = self.selected_project().map(|p| p.id);
+        let project_id = self.list_state.selected().map(|idx| idx as i64);
         let project_name = self.selected_project().map(|p| p.name.clone());
 
         let (title, lines) = if let Some(id) = project_id {
@@ -856,13 +889,19 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let help_text = " [a]dd  [i]mport  [p]ath  [g]it  [e]dit  [r]un  [s]top  [d]el  [c]fg  [F5]  [q]uit ";
-        let machine_text = format!(" Machine: {} ", self.machine_id);
+        let gh_label = if self.gh_available {
+            "[a]dd"
+        } else {
+            "[a]dd(gh unavailable)"
+        };
+
+        let help_text = format!(
+            " {}  [i]mport  [s]can  [g]it  [e]dit  [r]un  [x]stop  [d]el  [c]fg  [F5]  [q]uit ",
+            gh_label
+        );
 
         let help = Paragraph::new(Line::from(vec![
             Span::styled(help_text, Style::default().fg(Color::DarkGray)),
-            Span::raw(" | "),
-            Span::styled(machine_text, Style::default().fg(Color::Cyan)),
         ]));
 
         frame.render_widget(help, area);
@@ -870,16 +909,13 @@ impl App {
 
     fn render_project_list(&mut self, frame: &mut Frame, area: Rect) {
         let items: Vec<ListItem> = self
+            .store
             .projects
             .iter()
-            .map(|p| {
-                let has_path = self
-                    .db
-                    .get_location(p.id, &self.machine_id)
-                    .ok()
-                    .flatten()
-                    .is_some();
-                let is_running = self.process_manager.is_running(p.id);
+            .enumerate()
+            .map(|(idx, p)| {
+                let has_path = !p.path.is_empty() && Path::new(&p.path).exists();
+                let is_running = self.process_manager.is_running(idx as i64);
 
                 let status = if is_running {
                     Span::styled(" * ", Style::default().fg(Color::Green))
@@ -903,6 +939,8 @@ impl App {
 
     fn render_details(&self, frame: &mut Frame, area: Rect) {
         let content = if let Some(project) = self.selected_project() {
+            let repo_display = project.repo_url.as_deref().unwrap_or("");
+
             let mut lines = vec![
                 Line::from(vec![
                     Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
@@ -910,15 +948,17 @@ impl App {
                 ]),
                 Line::from(vec![
                     Span::styled("Repo: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(&project.repo_url),
+                    Span::raw(repo_display),
                 ]),
                 Line::from(""),
             ];
 
-            if let Some(ref loc) = self.selected_location {
+            let has_path = !project.path.is_empty() && Path::new(&project.path).exists();
+
+            if has_path {
                 lines.push(Line::from(vec![
                     Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(&loc.path),
+                    Span::raw(&project.path),
                 ]));
 
                 // Git status
@@ -975,7 +1015,7 @@ impl App {
                     }
                 }
 
-                if let Some(ref cmd) = loc.run_command {
+                if let Some(ref cmd) = project.run_command {
                     lines.push(Line::from(vec![
                         Span::styled("Override: ", Style::default().fg(Color::Yellow)),
                         Span::raw(cmd),
@@ -983,19 +1023,15 @@ impl App {
                 }
             } else {
                 lines.push(Line::from(Span::styled(
-                    "Path not set on this machine",
+                    "Path not set",
                     Style::default().fg(Color::Red),
                 )));
-                if !project.repo_url.is_empty() {
+                if project.repo_url.is_some() {
                     lines.push(Line::from(Span::styled(
                         "Press 'g' to clone from repo",
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
-                lines.push(Line::from(Span::styled(
-                    "Press 'p' to set path manually",
-                    Style::default().fg(Color::DarkGray),
-                )));
             }
 
             lines
