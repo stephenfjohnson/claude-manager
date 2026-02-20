@@ -1,13 +1,15 @@
 use anyhow::{bail, Result};
 use std::process::Command;
 
-/// Check if gh CLI is authenticated
-pub fn check_auth() -> Result<bool> {
-    let output = Command::new("gh")
+/// Check if gh CLI is authenticated. Returns false if gh is not installed or not authed.
+pub fn check_auth() -> bool {
+    Command::new("gh")
         .args(["auth", "status"])
-        .output()?;
-
-    Ok(output.status.success())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Check if a repo exists on GitHub
