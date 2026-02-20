@@ -1,65 +1,42 @@
 mod app;
-mod config;
-mod db;
 mod detect;
-mod errors;
 mod gh;
 mod git_status;
-mod machine;
 mod ports;
 mod process;
 mod scanner;
-mod sync;
+mod store;
 mod tui;
 mod ui;
 
-use crate::errors::AppError;
-use clap::Parser;
-
-#[derive(Parser)]
-#[command(name = "claude-manager")]
-#[command(about = "Personal project dashboard across machines")]
-struct Cli {
-    /// Initialize Claude Manager (run once per machine)
-    #[arg(long)]
-    init: bool,
-}
+use crate::store::{ProjectEntry, ProjectStore};
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let mut store = ProjectStore::load()?;
+    let first_run = store.is_first_run();
 
-    // Always check gh auth first
-    if !gh::check_auth()? {
-        return Err(AppError::GhNotAuthenticated.into());
+    // On first run, offer to scan for projects
+    if first_run {
+        run_first_time_setup(&mut store)?;
     }
 
-    if cli.init {
-        run_init()?;
-    } else {
-        run_tui()?;
-    }
+    // Check gh auth (non-fatal)
+    let gh_available = gh::check_auth();
+
+    let mut app = app::App::new(store, gh_available)?;
+    let mut tui = tui::Tui::new()?;
+    tui.run(&mut app)?;
 
     Ok(())
 }
 
-fn run_init() -> anyhow::Result<()> {
+fn run_first_time_setup(store: &mut ProjectStore) -> anyhow::Result<()> {
     use std::io::{self, Write};
 
-    println!("Initializing Claude Manager...\n");
-
-    let machine_id = machine::get_or_create_machine_id()?;
-    println!("Machine ID: {}", machine_id);
-
-    sync::init()?;
-    println!("Sync repo ready.");
-
-    let db_path = sync::db_path()?;
-    let db = db::Database::open(&db_path)?;
-    println!("Database initialized.");
-
-    // Offer to scan for projects
-    print!("\nScan for existing git repos in common directories? [Y/n] ");
+    println!("Welcome to Claude Manager!\n");
+    print!("Scan for existing git repos in common directories? [Y/n] ");
     io::stdout().flush()?;
+
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
 
@@ -98,43 +75,18 @@ fn run_init() -> anyhow::Result<()> {
 
             for idx in to_import {
                 let proj = &found[idx];
-                let url = proj.remote_url.as_deref().unwrap_or("");
-
-                match db.add_project(&proj.name, url) {
-                    Ok(id) => {
-                        db.set_location(id, &machine_id, proj.path.to_str().unwrap_or(""))?;
-                        println!("  Imported: {}", proj.name);
-                    }
-                    Err(e) => {
-                        println!("  Skipped {} ({})", proj.name, e);
-                    }
-                }
+                store.add(ProjectEntry {
+                    name: proj.name.clone(),
+                    repo_url: proj.remote_url.clone(),
+                    path: proj.path.to_string_lossy().to_string(),
+                    run_command: None,
+                });
+                println!("  Imported: {}", proj.name);
             }
-
-            // Sync to GitHub
-            sync::push("Import projects from scan")?;
-            println!("\nProjects synced to GitHub.");
         }
     }
 
-    println!("\nInitialization complete! Run 'claude-manager' to start.");
-    Ok(())
-}
-
-fn run_tui() -> anyhow::Result<()> {
-    if !sync::is_initialized()? {
-        return Err(AppError::NotInitialized.into());
-    }
-
-    sync::pull()?;
-
-    let machine_id = machine::get_machine_id()?.ok_or(AppError::NotInitialized)?;
-    let db_path = sync::db_path()?;
-    let db = db::Database::open(&db_path)?;
-
-    let mut app = app::App::new(db, machine_id)?;
-    let mut tui = tui::Tui::new()?;
-    tui.run(&mut app)?;
-
+    store.save()?;
+    println!("\nSetup complete! Starting Claude Manager...\n");
     Ok(())
 }
