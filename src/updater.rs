@@ -34,17 +34,24 @@ impl UpdateChecker {
 }
 
 fn check_for_update(api_url: &str, current_version: &str) -> Option<UpdateInfo> {
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     #[cfg(windows)]
-    let output = Command::new("curl.exe")
-        .args(["-s", "-L", "--max-time", "10", api_url])
-        .output()
-        .ok()?;
+    let output = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        Command::new("curl.exe")
+            .args(["-s", "-L", "--max-time", "10", api_url])
+            .stdin(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?
+    };
 
     #[cfg(not(windows))]
     let output = Command::new("curl")
         .args(["-s", "-L", "--max-time", "10", api_url])
+        .stdin(Stdio::null())
         .output()
         .ok()?;
 
@@ -138,6 +145,8 @@ pub fn apply_update(info: &UpdateInfo) -> anyhow::Result<()> {
     // Download
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let status = Command::new("curl.exe")
             .args([
                 "-s",
@@ -148,6 +157,8 @@ pub fn apply_update(info: &UpdateInfo) -> anyhow::Result<()> {
                 &archive_path.to_string_lossy().to_string(),
                 &info.download_url,
             ])
+            .stdin(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
             .status()?;
         if !status.success() {
             anyhow::bail!("Download failed");
