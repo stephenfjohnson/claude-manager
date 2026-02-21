@@ -9,6 +9,7 @@ use std::thread;
 pub struct ProcessManager {
     processes: HashMap<String, Child>,
     output_buffers: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    ports: HashMap<String, u16>,
 }
 
 impl ProcessManager {
@@ -16,6 +17,7 @@ impl ProcessManager {
         Self {
             processes: HashMap::new(),
             output_buffers: Arc::new(Mutex::new(HashMap::new())),
+            ports: HashMap::new(),
         }
     }
 
@@ -123,7 +125,10 @@ impl ProcessManager {
             });
         }
 
-        self.processes.insert(key, child);
+        self.processes.insert(key.clone(), child);
+        if let Some(p) = port {
+            self.ports.insert(key, p);
+        }
         Ok(())
     }
 
@@ -152,22 +157,27 @@ impl ProcessManager {
             buffers.remove(project_name);
         }
 
+        self.ports.remove(project_name);
+
         Ok(())
     }
 
-    pub fn is_running(&mut self, project_name: &str) -> bool {
-        if let Some(child) = self.processes.get_mut(project_name) {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    // Process exited, remove it
-                    self.processes.remove(project_name);
-                    false
-                }
-                Ok(None) => true,
-                Err(_) => false,
-            }
-        } else {
-            false
+    pub fn is_running(&self, project_name: &str) -> bool {
+        self.processes.contains_key(project_name)
+    }
+
+    pub fn reap_dead(&mut self) {
+        let dead: Vec<String> = self
+            .processes
+            .iter_mut()
+            .filter_map(|(name, child)| match child.try_wait() {
+                Ok(Some(_)) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        for name in dead {
+            self.processes.remove(&name);
+            self.ports.remove(&name);
         }
     }
 
@@ -181,6 +191,10 @@ impl ProcessManager {
 
     pub fn running_projects(&self) -> Vec<String> {
         self.processes.keys().cloned().collect()
+    }
+
+    pub fn get_port(&self, project_name: &str) -> Option<u16> {
+        self.ports.get(project_name).copied()
     }
 }
 

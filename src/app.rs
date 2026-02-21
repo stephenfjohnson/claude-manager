@@ -1,7 +1,7 @@
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
@@ -15,6 +15,7 @@ use crate::ports::{self, PortInfo};
 use crate::process::ProcessManager;
 use crate::scanner;
 use crate::store::{ProjectEntry, ProjectStore};
+use crate::theme;
 use crate::ui::input::InputDialog;
 use crate::ui::selector::RepoSelector;
 
@@ -748,6 +749,7 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
+        self.process_manager.reap_dead();
         self.maybe_refresh_ports();
 
         let has_running = !self.process_manager.running_projects().is_empty();
@@ -822,7 +824,7 @@ impl App {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(" Confirm ")
-                    .border_style(Style::default().fg(Color::Yellow)),
+                    .border_style(Style::default().fg(theme::WARNING)),
             )
             .alignment(ratatui::layout::Alignment::Center);
 
@@ -852,57 +854,74 @@ impl App {
             .map(|s| Line::from(s.as_str()))
             .collect();
 
-        let para = Paragraph::new(visible_lines)
-            .block(Block::default().borders(Borders::ALL).title(title));
+        let para = Paragraph::new(visible_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(theme::accent_title())
+                .border_style(theme::inactive_border()),
+        );
         frame.render_widget(para, area);
     }
 
     fn render_ports_bar(&self, frame: &mut Frame, area: Rect) {
-        let port_spans: Vec<Span> = self
+        let running = self.process_manager.running_projects();
+        let running_count = running.len();
+
+        let mut spans: Vec<Span> = vec![];
+
+        if running_count > 0 {
+            spans.push(Span::styled(
+                format!(" {} running", running_count),
+                Style::default().fg(theme::STATUS_RUNNING),
+            ));
+            spans.push(Span::styled(" \u{2502} ", theme::label()));
+        }
+
+        let port_spans: Vec<String> = self
             .port_info
             .iter()
-            .map(|p| {
-                let label = match (&p.process_name, p.pid) {
-                    (Some(name), Some(pid)) => format!("{}({},{})", p.port, name, pid),
-                    (Some(name), None) => format!("{}({})", p.port, name),
-                    (None, Some(pid)) => format!("{}(PID:{})", p.port, pid),
-                    (None, None) => format!("{}", p.port),
-                };
-                Span::styled(format!(" {} ", label), Style::default().fg(Color::Yellow))
-            })
+            .map(|p| format!("{}", p.port))
             .collect();
 
-        let content = if port_spans.is_empty() {
-            Line::from(Span::styled(
-                " No ports in use ",
-                Style::default().fg(Color::DarkGray),
-            ))
+        if !port_spans.is_empty() {
+            spans.push(Span::styled("ports: ", theme::label()));
+            spans.push(Span::styled(
+                port_spans.join(", "),
+                Style::default().fg(theme::STATUS_PORT),
+            ));
         } else {
-            let mut spans = vec![Span::styled("Ports:", Style::default().fg(Color::DarkGray))];
-            spans.extend(port_spans);
-            Line::from(spans)
-        };
+            spans.push(Span::styled(" no active ports", theme::label()));
+        }
 
+        spans.push(Span::styled(
+            format!(" \u{2502} v{}", env!("CARGO_PKG_VERSION")),
+            theme::label(),
+        ));
+
+        let content = Line::from(spans);
         let para = Paragraph::new(content);
         frame.render_widget(para, area);
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let gh_label = if self.gh_available {
-            "[a]dd"
-        } else {
-            "[a]dd(gh unavailable)"
-        };
+        let gh_label = if self.gh_available { "[a]dd" } else { "[a]dd(no gh)" };
 
-        let help_text = format!(
-            " {}  [i]mport  [s]can  [g]it  [e]dit  [r]un  [x]stop  [d]el  [c]fg  [F5]  [q]uit ",
-            gh_label
-        );
+        let help_spans = vec![
+            Span::styled(format!(" {}  ", gh_label), theme::label()),
+            Span::styled("[i]mport  ", theme::label()),
+            Span::styled("[s]can  ", theme::label()),
+            Span::styled("[g]it  ", theme::label()),
+            Span::styled("[e]dit  ", theme::label()),
+            Span::styled("[r]un  ", Style::default().fg(theme::STATUS_RUNNING)),
+            Span::styled("[x]stop  ", Style::default().fg(theme::DANGER)),
+            Span::styled("[d]el  ", theme::label()),
+            Span::styled("[c]fg  ", theme::label()),
+            Span::styled("[F5]  ", theme::label()),
+            Span::styled("[q]uit", theme::label()),
+        ];
 
-        let help = Paragraph::new(Line::from(vec![
-            Span::styled(help_text, Style::default().fg(Color::DarkGray)),
-        ]));
-
+        let help = Paragraph::new(Line::from(help_spans));
         frame.render_widget(help, area);
     }
 
@@ -914,23 +933,45 @@ impl App {
             .map(|p| {
                 let has_path = !p.path.is_empty() && Path::new(&p.path).exists();
                 let is_running = self.process_manager.is_running(&p.name);
+                let port = self.process_manager.get_port(&p.name);
 
-                let status = if is_running {
-                    Span::styled(" * ", Style::default().fg(Color::Green))
+                let indicator = if is_running {
+                    Span::styled(" \u{25CF} ", Style::default().fg(theme::STATUS_RUNNING))
                 } else if has_path {
-                    Span::styled(" + ", Style::default().fg(Color::Green))
+                    Span::styled(" \u{25CB} ", Style::default().fg(theme::STATUS_STOPPED))
                 } else {
-                    Span::styled(" - ", Style::default().fg(Color::Red))
+                    Span::styled(" \u{25CB} ", Style::default().fg(theme::DANGER))
                 };
 
-                let line = Line::from(vec![status, Span::raw(&p.name)]);
-                ListItem::new(line)
+                let name_style = if is_running {
+                    Style::default().fg(theme::FG)
+                } else {
+                    Style::default().fg(theme::FG_DIM)
+                };
+
+                let mut spans = vec![indicator, Span::styled(p.name.clone(), name_style)];
+
+                if let Some(port) = port {
+                    spans.push(Span::styled(
+                        format!(" :{}", port),
+                        Style::default().fg(theme::STATUS_PORT),
+                    ));
+                }
+
+                ListItem::new(Line::from(spans))
             })
             .collect();
 
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(" Projects "))
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Projects ")
+                    .title_style(theme::accent_title())
+                    .border_style(theme::active_border()),
+            )
+            .highlight_style(theme::highlight())
+            .highlight_symbol("\u{25B6} ");
 
         frame.render_stateful_widget(list, area, &mut self.list_state);
     }
@@ -941,104 +982,151 @@ impl App {
 
             let mut lines = vec![
                 Line::from(vec![
-                    Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  Name      ", theme::label()),
                     Span::raw(&project.name),
                 ]),
                 Line::from(vec![
-                    Span::styled("Repo: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  Repo      ", theme::label()),
                     Span::raw(repo_display),
                 ]),
-                Line::from(""),
             ];
 
             let has_path = !project.path.is_empty() && Path::new(&project.path).exists();
 
             if has_path {
                 lines.push(Line::from(vec![
-                    Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  Path      ", theme::label()),
                     Span::raw(&project.path),
                 ]));
 
-                // Git status
-                if let Some(ref git) = self.selected_git_status {
-                    lines.push(Line::from(""));
+                if let Some(ref det) = self.selected_detection {
                     lines.push(Line::from(vec![
-                        Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
-                        Span::raw(&git.branch),
-                    ]));
-                    lines.push(Line::from(vec![
-                        Span::styled("Staged: ", Style::default().fg(Color::DarkGray)),
-                        Span::raw(git.staged.to_string()),
-                        Span::raw("  "),
-                        Span::styled("Modified: ", Style::default().fg(Color::DarkGray)),
-                        Span::raw(git.modified.to_string()),
-                    ]));
-                    lines.push(Line::from(vec![
-                        Span::styled("Ahead: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(
-                            git.ahead.to_string(),
-                            Style::default().fg(if git.ahead > 0 {
-                                Color::Yellow
-                            } else {
-                                Color::White
-                            }),
-                        ),
-                        Span::raw("  "),
-                        Span::styled("Behind: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(
-                            git.behind.to_string(),
-                            Style::default().fg(if git.behind > 0 {
-                                Color::Red
-                            } else {
-                                Color::White
-                            }),
-                        ),
+                        Span::styled("  Type      ", theme::label()),
+                        Span::raw(if let Some(pm) = det.package_manager {
+                            format!("{:?} ({})", det.project_type, pm.as_str())
+                        } else {
+                            format!("{:?}", det.project_type)
+                        }),
                     ]));
                 }
 
                 lines.push(Line::from(""));
 
-                if let Some(ref det) = self.selected_detection {
-                    if let Some(pm) = det.package_manager {
-                        lines.push(Line::from(vec![
-                            Span::styled("Type: ", Style::default().fg(Color::DarkGray)),
-                            Span::raw(format!("{:?} ({})", det.project_type, pm.as_str())),
-                        ]));
-                    }
-                    if let Some(ref cmd) = det.run_command {
-                        lines.push(Line::from(vec![
-                            Span::styled("Run:  ", Style::default().fg(Color::DarkGray)),
-                            Span::raw(cmd),
-                        ]));
-                    }
+                // Git section
+                lines.push(Line::from(vec![
+                    Span::styled("  \u{2500}\u{2500} Git \u{2500}\u{2500}", Style::default().fg(theme::ACCENT)),
+                ]));
+
+                if let Some(ref git) = self.selected_git_status {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Branch    ", theme::label()),
+                        Span::raw(&git.branch),
+                    ]));
+
+                    let status_text = if git.staged == 0 && git.modified == 0 && git.untracked == 0 {
+                        Span::styled("\u{2713} clean", Style::default().fg(theme::GIT_CLEAN))
+                    } else {
+                        Span::styled(
+                            format!("{} staged, {} modified, {} untracked", git.staged, git.modified, git.untracked),
+                            Style::default().fg(theme::GIT_DIRTY),
+                        )
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled("  Status    ", theme::label()),
+                        status_text,
+                    ]));
+
+                    lines.push(Line::from(vec![
+                        Span::styled("  Ahead     ", theme::label()),
+                        Span::styled(
+                            git.ahead.to_string(),
+                            Style::default().fg(if git.ahead > 0 { theme::GIT_AHEAD } else { Color::White }),
+                        ),
+                        Span::raw("    "),
+                        Span::styled("Behind  ", theme::label()),
+                        Span::styled(
+                            git.behind.to_string(),
+                            Style::default().fg(if git.behind > 0 { theme::GIT_BEHIND } else { Color::White }),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Loading...", theme::label()),
+                    ]));
                 }
 
-                if let Some(ref cmd) = project.run_command {
+                lines.push(Line::from(""));
+
+                // Runtime section
+                lines.push(Line::from(vec![
+                    Span::styled("  \u{2500}\u{2500} Runtime \u{2500}\u{2500}", Style::default().fg(theme::ACCENT)),
+                ]));
+
+                let is_running = self.process_manager.is_running(&project.name);
+                let port = self.process_manager.get_port(&project.name);
+
+                lines.push(Line::from(vec![
+                    Span::styled("  Status    ", theme::label()),
+                    if is_running {
+                        Span::styled("\u{25CF} Running", Style::default().fg(theme::STATUS_RUNNING))
+                    } else {
+                        Span::styled("\u{25CB} Stopped", Style::default().fg(theme::STATUS_STOPPED))
+                    },
+                ]));
+
+                if let Some(port) = port {
                     lines.push(Line::from(vec![
-                        Span::styled("Override: ", Style::default().fg(Color::Yellow)),
+                        Span::styled("  Port      ", theme::label()),
+                        Span::styled(port.to_string(), Style::default().fg(theme::STATUS_PORT)),
+                    ]));
+                }
+
+                let cmd = project.run_command.as_ref().or_else(|| {
+                    self.selected_detection.as_ref().and_then(|d| d.run_command.as_ref())
+                });
+                if let Some(cmd) = cmd {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Command   ", theme::label()),
                         Span::raw(cmd),
                     ]));
                 }
+
+                if let Some(ref override_cmd) = project.run_command {
+                    // Only show override if it's different from the detected command
+                    let detected_cmd = self.selected_detection.as_ref().and_then(|d| d.run_command.as_ref());
+                    if detected_cmd.is_some() && detected_cmd != Some(override_cmd) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  Override  ", Style::default().fg(theme::WARNING)),
+                            Span::raw(override_cmd),
+                        ]));
+                    }
+                }
             } else {
+                lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    "Path not set",
-                    Style::default().fg(Color::Red),
+                    "  Path not set",
+                    Style::default().fg(theme::DANGER),
                 )));
                 if project.repo_url.is_some() {
                     lines.push(Line::from(Span::styled(
-                        "Press 'g' to clone from repo",
-                        Style::default().fg(Color::DarkGray),
+                        "  Press 'g' to clone from repo",
+                        theme::label(),
                     )));
                 }
             }
 
             lines
         } else {
-            vec![Line::from("No project selected")]
+            vec![Line::from("  No project selected")]
         };
 
-        let para = Paragraph::new(content)
-            .block(Block::default().borders(Borders::ALL).title(" Details "));
+        let para = Paragraph::new(content).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Details ")
+                .title_style(theme::accent_title())
+                .border_style(theme::active_border()),
+        );
         frame.render_widget(para, area);
     }
 }
