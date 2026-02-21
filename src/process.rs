@@ -10,6 +10,7 @@ pub struct ProcessManager {
     processes: HashMap<String, Child>,
     output_buffers: Arc<Mutex<HashMap<String, Vec<String>>>>,
     ports: HashMap<String, u16>,
+    claude_pids: HashMap<String, u32>,
 }
 
 impl ProcessManager {
@@ -18,6 +19,7 @@ impl ProcessManager {
             processes: HashMap::new(),
             output_buffers: Arc::new(Mutex::new(HashMap::new())),
             ports: HashMap::new(),
+            claude_pids: HashMap::new(),
         }
     }
 
@@ -132,9 +134,38 @@ impl ProcessManager {
         Ok(())
     }
 
+    pub fn set_claude_pid(&mut self, project_name: &str, pid: u32) {
+        self.claude_pids.insert(project_name.to_string(), pid);
+    }
+
+    fn kill_claude_terminal(&mut self, project_name: &str) {
+        if let Some(pid) = self.claude_pids.remove(project_name) {
+            #[cfg(windows)]
+            {
+                use std::process::Command as StdCommand;
+                let _ = StdCommand::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+
+            #[cfg(unix)]
+            {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGTERM);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+        }
+    }
+
     pub fn stop(&mut self, project_name: &str) -> Result<()> {
+        // Kill dev server
         if let Some(mut child) = self.processes.remove(project_name) {
-            // Try graceful shutdown first
             #[cfg(unix)]
             {
                 unsafe {
@@ -145,11 +176,22 @@ impl ProcessManager {
             {
                 let _ = child.kill();
             }
-
-            // Wait a bit then force kill if needed
             std::thread::sleep(std::time::Duration::from_millis(500));
             let _ = child.kill();
             let _ = child.wait();
+        }
+
+        // Kill Claude terminal
+        self.kill_claude_terminal(project_name);
+
+        // Verify port is freed
+        if let Some(port) = self.ports.remove(project_name) {
+            for _ in 0..10 {
+                if !Self::is_port_open(port) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
         }
 
         // Clean up buffer
@@ -157,9 +199,16 @@ impl ProcessManager {
             buffers.remove(project_name);
         }
 
-        self.ports.remove(project_name);
-
         Ok(())
+    }
+
+    fn is_port_open(port: u16) -> bool {
+        use std::net::TcpStream;
+        TcpStream::connect_timeout(
+            &format!("127.0.0.1:{}", port).parse().unwrap(),
+            std::time::Duration::from_millis(50),
+        )
+        .is_ok()
     }
 
     pub fn is_running(&self, project_name: &str) -> bool {

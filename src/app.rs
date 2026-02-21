@@ -495,8 +495,8 @@ impl App {
                 return;
             }
 
-            let path = Path::new(&project.path);
-            if !path.exists() {
+            let path_buf = std::path::PathBuf::from(&project.path);
+            if !path_buf.exists() {
                 return;
             }
 
@@ -504,15 +504,15 @@ impl App {
             let run_command_override = project.run_command.clone();
 
             // Git fetch before running (blocking)
-            self.git_fetch(path);
+            self.git_fetch(&path_buf);
 
             // Install dependencies for JS projects before starting dev server
             if self.is_js_project() {
-                self.install_node_modules(path);
+                self.install_node_modules(&path_buf);
             }
 
             // Spawn a new terminal with claude
-            self.spawn_terminal_with_claude(path);
+            self.spawn_terminal_with_claude(&path_buf, &project_name);
 
             // Also start any dev server in background if not already running
             if !self.process_manager.is_running(&project_name) {
@@ -527,7 +527,7 @@ impl App {
                         None
                     };
 
-                    let _ = self.process_manager.start_with_port(&project_name, path, &cmd, port);
+                    let _ = self.process_manager.start_with_port(&project_name, &path_buf, &cmd, port);
                 }
             }
         }
@@ -595,7 +595,7 @@ impl App {
             .unwrap_or(false)
     }
 
-    fn spawn_terminal_with_claude(&self, path: &Path) {
+    fn spawn_terminal_with_claude(&mut self, path: &Path, project_name: &str) {
         use std::process::Command;
 
         let path_str = path.to_string_lossy().to_string();
@@ -603,57 +603,70 @@ impl App {
         // Try various terminal emulators in order of preference
         #[cfg(target_os = "linux")]
         {
-            // Try common Linux terminal emulators in order of preference
-            if Command::new("which").arg("ghostty").output().map(|o| o.status.success()).unwrap_or(false) {
+            let child = if Command::new("which").arg("ghostty").output().map(|o| o.status.success()).unwrap_or(false) {
                 let shell_cmd = format!("cd '{}' && claude; exec $SHELL", path_str);
-                let _ = Command::new("ghostty")
+                Command::new("ghostty")
                     .args(["-e", "bash", "-c", &shell_cmd])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else if Command::new("which").arg("alacritty").output().map(|o| o.status.success()).unwrap_or(false) {
-                let _ = Command::new("alacritty")
+                Command::new("alacritty")
                     .args(["--working-directory", &path_str, "-e", "claude"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else if Command::new("which").arg("kitty").output().map(|o| o.status.success()).unwrap_or(false) {
-                let _ = Command::new("kitty")
+                Command::new("kitty")
                     .args(["--directory", &path_str, "claude"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else if Command::new("which").arg("gnome-terminal").output().map(|o| o.status.success()).unwrap_or(false) {
-                let _ = Command::new("gnome-terminal")
+                Command::new("gnome-terminal")
                     .args(["--working-directory", &path_str, "--", "claude"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else if Command::new("which").arg("konsole").output().map(|o| o.status.success()).unwrap_or(false) {
-                let _ = Command::new("konsole")
+                Command::new("konsole")
                     .args(["--workdir", &path_str, "-e", "claude"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else if Command::new("which").arg("xfce4-terminal").output().map(|o| o.status.success()).unwrap_or(false) {
-                let _ = Command::new("xfce4-terminal")
+                Command::new("xfce4-terminal")
                     .args(["--working-directory", &path_str, "-e", "claude"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else if Command::new("which").arg("xterm").output().map(|o| o.status.success()).unwrap_or(false) {
                 let xterm_cmd = format!("cd '{}' && claude", path_str);
-                let _ = Command::new("xterm")
+                Command::new("xterm")
                     .args(["-e", &xterm_cmd])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .spawn();
+                    .spawn()
+                    .ok()
+            } else {
+                None
+            };
+
+            if let Some(child) = child {
+                self.process_manager.set_claude_pid(project_name, child.id());
             }
         }
 
         #[cfg(target_os = "macos")]
         {
             // Use osascript to open Terminal.app
+            // Note: osascript won't give us a useful PID for the terminal process
             let script = format!(
                 r#"tell application "Terminal"
                     activate
@@ -669,19 +682,25 @@ impl App {
         #[cfg(target_os = "windows")]
         {
             // Try Windows Terminal first, fall back to cmd
-            if Command::new("where")
+            let child = if Command::new("where")
                 .arg("wt")
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
             {
-                let _ = Command::new("wt")
+                Command::new("wt")
                     .args(["-d", &path_str, "cmd", "/k", "claude"])
-                    .spawn();
+                    .spawn()
+                    .ok()
             } else {
-                let _ = Command::new("cmd")
+                Command::new("cmd")
                     .args(["/c", "start", "cmd", "/k", &format!("cd /d \"{}\" && claude", path_str)])
-                    .spawn();
+                    .spawn()
+                    .ok()
+            };
+
+            if let Some(child) = child {
+                self.process_manager.set_claude_pid(project_name, child.id());
             }
         }
     }
