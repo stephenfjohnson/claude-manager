@@ -1,11 +1,12 @@
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
     Frame,
 };
+
+use crate::theme;
 
 pub struct RepoSelector {
     pub visible: bool,
@@ -141,14 +142,11 @@ impl RepoSelector {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(title)
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .title_style(theme::accent_title())
+                    .border_style(theme::active_border()),
             )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("> ");
+            .highlight_style(theme::highlight())
+            .highlight_symbol("\u{25B6} ");
 
         frame.render_stateful_widget(list, dialog_area, &mut self.state);
     }

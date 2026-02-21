@@ -6,6 +6,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::theme;
+
 pub struct InputDialog {
     pub title: String,
     pub value: String,
@@ -77,7 +79,8 @@ impl InputDialog {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(format!(" {} ", self.title))
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .title_style(theme::accent_title())
+                    .border_style(theme::active_border()),
             );
         frame.render_widget(input, dialog_area);
     }
