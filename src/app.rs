@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::detect;
 use crate::gh;
@@ -105,6 +105,19 @@ impl App {
         Ok(app)
     }
 
+    /// Canonicalize a path, stripping the \\?\ prefix that Windows adds.
+    fn clean_path(path: &Path) -> PathBuf {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        #[cfg(windows)]
+        {
+            let s = resolved.to_string_lossy();
+            if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                return PathBuf::from(stripped);
+            }
+        }
+        resolved
+    }
+
     pub fn should_quit(&self) -> bool {
         self.should_quit
     }
@@ -187,8 +200,8 @@ impl App {
                         self.store.install_dir = None;
                     } else {
                         // Canonicalize the path to ensure it's absolute and valid
-                        let path = std::path::PathBuf::from(&dir);
-                        let resolved = path.canonicalize().unwrap_or(path);
+                        let path = PathBuf::from(&dir);
+                        let resolved = Self::clean_path(&path);
                         self.store.install_dir =
                             Some(resolved.to_string_lossy().to_string());
                     }
@@ -312,8 +325,7 @@ impl App {
             if !url.is_empty() {
                 let dest = install_dir.join(name);
                 if self.clone_repo(url, &dest) {
-                    let resolved = dest.canonicalize().unwrap_or(dest);
-                    resolved.to_str().unwrap_or("").to_string()
+                    Self::clean_path(&dest).to_string_lossy().to_string()
                 } else {
                     String::new()
                 }
@@ -384,7 +396,7 @@ impl App {
             let dest = base_dir.join(&name);
             if self.clone_repo(&repo_url, &dest) {
                 // Canonicalize to ensure we store an absolute path
-                let resolved = dest.canonicalize().unwrap_or(dest);
+                let resolved = Self::clean_path(&dest);
                 if let Some(dest_str) = resolved.to_str() {
                     if let Some(project) = self.store.get_mut(&name) {
                         project.path = dest_str.to_string();
@@ -1008,24 +1020,33 @@ impl App {
     }
 
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
-        let gh_label = if self.gh_available { "[a]dd" } else { "[a]dd(no gh)" };
+        let gh_label = if self.gh_available {
+            "[a]dd from GitHub"
+        } else {
+            "[a]dd(no gh)"
+        };
+
+        let cfg_label = match &self.store.install_dir {
+            Some(dir) => format!("[c]lone dir: {}", dir),
+            None => "[c]lone dir: not set".to_string(),
+        };
 
         let mut help_spans = vec![
             Span::styled(format!(" {}  ", gh_label), theme::label()),
-            Span::styled("[i]mport  ", theme::label()),
-            Span::styled("[s]can  ", theme::label()),
-            Span::styled("[g]it  ", theme::label()),
-            Span::styled("[e]dit  ", theme::label()),
+            Span::styled("[i]mport path  ", theme::label()),
+            Span::styled("[s]can repos  ", theme::label()),
+            Span::styled("[g]it clone  ", theme::label()),
+            Span::styled("[e]dit cmd  ", theme::label()),
             Span::styled("[r]un  ", theme::status_running()),
             Span::styled("[x]stop  ", Style::default().fg(theme::DANGER)),
-            Span::styled("[d]el  ", theme::label()),
-            Span::styled("[c]fg  ", theme::label()),
-            Span::styled("[F5]  ", theme::label()),
+            Span::styled("[d]elete  ", theme::label()),
+            Span::styled(format!("{}  ", cfg_label), theme::label()),
+            Span::styled("[F5]refresh  ", theme::label()),
             Span::styled("[q]uit", theme::label()),
         ];
 
         if self.update_available.is_some() {
-            help_spans.push(Span::styled("  [u]pdate", Style::default().fg(theme::WARNING)));
+            help_spans.push(Span::styled("  [u]pdate available", Style::default().fg(theme::WARNING)));
         }
 
         let help = Paragraph::new(Line::from(help_spans));

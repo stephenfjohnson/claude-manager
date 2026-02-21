@@ -102,15 +102,25 @@ impl ProjectStore {
             .find(|p| p.name.eq_ignore_ascii_case(name))
     }
 
-    /// Get the install directory as an expanded path (~ replaced with home dir).
+    /// Get the install directory as an expanded, absolute path.
+    /// Returns None if the stored path is not absolute (invalid).
     pub fn get_install_dir(&self) -> Option<PathBuf> {
-        self.install_dir.as_ref().map(|dir| {
-            if dir.starts_with("~/") {
+        self.install_dir.as_ref().and_then(|dir| {
+            let path = if dir.starts_with("~/") {
                 if let Some(home) = dirs::home_dir() {
-                    return home.join(&dir[2..]);
+                    home.join(&dir[2..])
+                } else {
+                    return None;
                 }
+            } else {
+                PathBuf::from(dir)
+            };
+            // Only return absolute paths to prevent cloning relative to cwd
+            if path.is_absolute() {
+                Some(path)
+            } else {
+                None
             }
-            PathBuf::from(dir)
         })
     }
 
