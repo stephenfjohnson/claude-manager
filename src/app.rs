@@ -19,6 +19,7 @@ use crate::store::{ProjectEntry, ProjectStore};
 use crate::theme;
 use crate::ui::input::InputDialog;
 use crate::ui::selector::RepoSelector;
+use crate::updater::{self, UpdateChecker, UpdateInfo};
 
 #[derive(Default, PartialEq)]
 enum InputMode {
@@ -58,6 +59,10 @@ pub struct App {
     should_quit: bool,
     // Background git status
     git_worker: GitWorker,
+    // Auto-updater
+    update_checker: Option<UpdateChecker>,
+    update_available: Option<UpdateInfo>,
+    update_status: Option<String>,
 }
 
 impl App {
@@ -86,6 +91,9 @@ impl App {
             gh_available,
             should_quit: false,
             git_worker: GitWorker::new(),
+            update_checker: Some(UpdateChecker::check_in_background("stephenfjohnson", "claude-manager")),
+            update_available: None,
+            update_status: None,
         };
         if let Some(project) = app.store.projects.first() {
             if !project.path.is_empty() {
@@ -272,6 +280,21 @@ impl App {
                                 self.clone_path_input.show();
                                 self.input_mode = InputMode::ClonePath;
                             }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('u') => {
+                if let Some(info) = self.update_available.clone() {
+                    self.update_status = Some("Downloading update...".to_string());
+                    match updater::apply_update(&info) {
+                        Ok(()) => {
+                            self.update_status =
+                                Some(format!("Updated to v{}! Restart to apply.", info.version));
+                            self.update_available = None;
+                        }
+                        Err(e) => {
+                            self.update_status = Some(format!("Update failed: {}", e));
                         }
                     }
                 }
@@ -792,6 +815,13 @@ impl App {
             }
         }
 
+        if let Some(ref checker) = self.update_checker {
+            if let Some(result) = checker.poll() {
+                self.update_available = result;
+                self.update_checker = None;
+            }
+        }
+
         self.process_manager.reap_dead();
         self.maybe_refresh_ports();
 
@@ -941,6 +971,21 @@ impl App {
             format!(" \u{2502} v{}", env!("CARGO_PKG_VERSION")),
             theme::label(),
         ));
+
+        if let Some(ref update) = self.update_available {
+            spans.push(Span::styled(" \u{2502} ", theme::label()));
+            spans.push(Span::styled(
+                format!("Update v{} available [u]", update.version),
+                Style::default().fg(theme::WARNING),
+            ));
+        }
+        if let Some(ref status) = self.update_status {
+            spans.push(Span::styled(" \u{2502} ", theme::label()));
+            spans.push(Span::styled(
+                status.clone(),
+                Style::default().fg(theme::ACCENT),
+            ));
+        }
 
         let content = Line::from(spans);
         let para = Paragraph::new(content);

@@ -10,10 +10,13 @@ mod scanner;
 mod store;
 mod tui;
 mod ui;
+mod updater;
 
 use crate::store::{ProjectEntry, ProjectStore};
 
 fn main() -> anyhow::Result<()> {
+    updater::cleanup_old_exe();
+
     let mut store = ProjectStore::load()?;
     let first_run = store.is_first_run();
 
