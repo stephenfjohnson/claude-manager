@@ -2,6 +2,7 @@ mod app;
 mod detect;
 mod gh;
 mod git_status;
+mod git_worker;
 mod theme;
 mod ports;
 mod process;

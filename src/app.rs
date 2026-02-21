@@ -10,7 +10,8 @@ use std::path::Path;
 
 use crate::detect;
 use crate::gh;
-use crate::git_status::{self, GitStatus};
+use crate::git_status::GitStatus;
+use crate::git_worker::GitWorker;
 use crate::ports::{self, PortInfo};
 use crate::process::ProcessManager;
 use crate::scanner;
@@ -55,6 +56,8 @@ pub struct App {
     pub gh_available: bool,
     // Quit state
     should_quit: bool,
+    // Background git status
+    git_worker: GitWorker,
 }
 
 impl App {
@@ -64,7 +67,7 @@ impl App {
             list_state.select(Some(0));
         }
 
-        let mut app = Self {
+        let app = Self {
             store,
             list_state,
             selected_detection: None,
@@ -82,8 +85,13 @@ impl App {
             last_port_scan: std::time::Instant::now(),
             gh_available,
             should_quit: false,
+            git_worker: GitWorker::new(),
         };
-        app.update_selected_details();
+        if let Some(project) = app.store.projects.first() {
+            if !project.path.is_empty() {
+                app.git_worker.request(&project.path);
+            }
+        }
         Ok(app)
     }
 
@@ -448,6 +456,7 @@ impl App {
         if let Ok(reloaded) = ProjectStore::load() {
             self.store = reloaded;
         }
+        self.git_worker.invalidate_all();
 
         // Refresh port scan
         self.port_info = ports::scan_ports();
@@ -719,20 +728,23 @@ impl App {
     }
 
     fn update_selected_details(&mut self) {
-        self.selected_detection = None;
-        self.selected_git_status = None;
-
         if let Some(idx) = self.list_state.selected() {
             if let Some(project) = self.store.projects.get(idx) {
-                if !project.path.is_empty() {
-                    let path = Path::new(&project.path);
-                    if path.exists() {
-                        self.selected_detection = detect::detect(path).ok();
-                        self.selected_git_status = git_status::get_status(path).ok();
+                if !project.path.is_empty() && Path::new(&project.path).exists() {
+                    // Use cached data immediately
+                    self.selected_detection = self.git_worker.get_detection(&project.path).cloned();
+                    self.selected_git_status = self.git_worker.get_git_status(&project.path).cloned();
+
+                    // Request fresh data in background if stale
+                    if self.git_worker.is_stale(&project.path) {
+                        self.git_worker.request(&project.path);
                     }
+                    return;
                 }
             }
         }
+        self.selected_detection = None;
+        self.selected_git_status = None;
     }
 
     fn selected_project(&self) -> Option<&ProjectEntry> {
@@ -749,6 +761,18 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
+        // Poll for background git status results
+        if self.git_worker.poll() {
+            if let Some(idx) = self.list_state.selected() {
+                if let Some(project) = self.store.projects.get(idx) {
+                    if !project.path.is_empty() {
+                        self.selected_detection = self.git_worker.get_detection(&project.path).cloned();
+                        self.selected_git_status = self.git_worker.get_git_status(&project.path).cloned();
+                    }
+                }
+            }
+        }
+
         self.process_manager.reap_dead();
         self.maybe_refresh_ports();
 
