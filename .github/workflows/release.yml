@@ -41,16 +41,7 @@ jobs:
           cd target/${{ matrix.target }}/release
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
             cp ../../../assets/icon.png claude-manager.png
-            cat > claude-manager.desktop <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Claude Manager
-Comment=Manage Claude instances and dev projects
-Exec=claude-manager
-Icon=claude-manager
-Terminal=true
-Categories=Development;
-DESKTOP
+            printf '[Desktop Entry]\nType=Application\nName=Claude Manager\nComment=Manage Claude instances and dev projects\nExec=claude-manager\nIcon=claude-manager\nTerminal=true\nCategories=Development;\n' > claude-manager.desktop
             tar czf ../../../claude-manager-${{ matrix.target }}.tar.gz claude-manager claude-manager.png claude-manager.desktop
           else
             tar czf ../../../claude-manager-${{ matrix.target }}.tar.gz claude-manager
