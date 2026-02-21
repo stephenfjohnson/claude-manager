@@ -19,7 +19,7 @@ use crate::store::{ProjectEntry, ProjectStore};
 use crate::theme;
 use crate::ui::input::InputDialog;
 use crate::ui::selector::RepoSelector;
-use crate::updater::{self, UpdateChecker, UpdateInfo};
+use crate::updater::{self, UpdateChecker, UpdateDownloader, UpdateInfo};
 
 #[derive(Default, PartialEq)]
 enum InputMode {
@@ -63,6 +63,7 @@ pub struct App {
     update_checker: Option<UpdateChecker>,
     update_available: Option<UpdateInfo>,
     update_status: Option<String>,
+    update_downloader: Option<UpdateDownloader>,
 }
 
 impl App {
@@ -94,6 +95,7 @@ impl App {
             update_checker: Some(UpdateChecker::check_in_background("stephenfjohnson", "claude-manager")),
             update_available: None,
             update_status: None,
+            update_downloader: None,
         };
         if let Some(project) = app.store.projects.first() {
             if !project.path.is_empty() {
@@ -285,18 +287,9 @@ impl App {
                 }
             }
             KeyCode::Char('u') => {
-                if let Some(info) = self.update_available.clone() {
+                if let Some(info) = self.update_available.take() {
                     self.update_status = Some("Downloading update...".to_string());
-                    match updater::apply_update(&info) {
-                        Ok(()) => {
-                            self.update_status =
-                                Some(format!("Updated to v{}! Restart to apply.", info.version));
-                            self.update_available = None;
-                        }
-                        Err(e) => {
-                            self.update_status = Some(format!("Update failed: {}", e));
-                        }
-                    }
+                    self.update_downloader = Some(UpdateDownloader::start(info));
                 }
             }
             KeyCode::F(5) => self.full_refresh(),
@@ -822,6 +815,17 @@ impl App {
             }
         }
 
+        // Poll for update download completion
+        if let Some(ref downloader) = self.update_downloader {
+            if let Some(result) = downloader.poll() {
+                match result {
+                    Ok(msg) => self.update_status = Some(msg),
+                    Err(msg) => self.update_status = Some(msg),
+                }
+                self.update_downloader = None;
+            }
+        }
+
         self.process_manager.reap_dead();
         self.maybe_refresh_ports();
 
@@ -946,7 +950,7 @@ impl App {
         if running_count > 0 {
             spans.push(Span::styled(
                 format!(" {} running", running_count),
-                Style::default().fg(theme::STATUS_RUNNING),
+                theme::status_running(),
             ));
             spans.push(Span::styled(" \u{2502} ", theme::label()));
         }
@@ -995,19 +999,23 @@ impl App {
     fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
         let gh_label = if self.gh_available { "[a]dd" } else { "[a]dd(no gh)" };
 
-        let help_spans = vec![
+        let mut help_spans = vec![
             Span::styled(format!(" {}  ", gh_label), theme::label()),
             Span::styled("[i]mport  ", theme::label()),
             Span::styled("[s]can  ", theme::label()),
             Span::styled("[g]it  ", theme::label()),
             Span::styled("[e]dit  ", theme::label()),
-            Span::styled("[r]un  ", Style::default().fg(theme::STATUS_RUNNING)),
+            Span::styled("[r]un  ", theme::status_running()),
             Span::styled("[x]stop  ", Style::default().fg(theme::DANGER)),
             Span::styled("[d]el  ", theme::label()),
             Span::styled("[c]fg  ", theme::label()),
             Span::styled("[F5]  ", theme::label()),
             Span::styled("[q]uit", theme::label()),
         ];
+
+        if self.update_available.is_some() {
+            help_spans.push(Span::styled("  [u]pdate", Style::default().fg(theme::WARNING)));
+        }
 
         let help = Paragraph::new(Line::from(help_spans));
         frame.render_widget(help, area);
@@ -1024,9 +1032,9 @@ impl App {
                 let port = self.process_manager.get_port(&p.name);
 
                 let indicator = if is_running {
-                    Span::styled(" \u{25CF} ", Style::default().fg(theme::STATUS_RUNNING))
+                    Span::styled(" \u{25CF} ", theme::status_running())
                 } else if has_path {
-                    Span::styled(" \u{25CB} ", Style::default().fg(theme::STATUS_STOPPED))
+                    Span::styled(" \u{25CB} ", theme::status_stopped())
                 } else {
                     Span::styled(" \u{25CB} ", Style::default().fg(theme::DANGER))
                 };
@@ -1156,9 +1164,9 @@ impl App {
                 lines.push(Line::from(vec![
                     Span::styled("  Status    ", theme::label()),
                     if is_running {
-                        Span::styled("\u{25CF} Running", Style::default().fg(theme::STATUS_RUNNING))
+                        Span::styled("\u{25CF} Running", theme::status_running())
                     } else {
-                        Span::styled("\u{25CB} Stopped", Style::default().fg(theme::STATUS_STOPPED))
+                        Span::styled("\u{25CB} Stopped", theme::status_stopped())
                     },
                 ]));
 

@@ -224,6 +224,27 @@ pub fn apply_update(info: &UpdateInfo) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub struct UpdateDownloader {
+    result_rx: Receiver<Result<String, String>>,
+}
+
+impl UpdateDownloader {
+    pub fn start(info: UpdateInfo) -> Self {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = apply_update(&info)
+                .map(|()| format!("Updated to v{}! Restart to apply.", info.version))
+                .map_err(|e| format!("Update failed: {}", e));
+            let _ = tx.send(result);
+        });
+        Self { result_rx: rx }
+    }
+
+    pub fn poll(&self) -> Option<Result<String, String>> {
+        self.result_rx.try_recv().ok()
+    }
+}
+
 pub fn cleanup_old_exe() {
     #[cfg(windows)]
     {
