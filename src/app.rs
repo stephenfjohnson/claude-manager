@@ -274,6 +274,18 @@ impl App {
                 if let Some(idx) = self.list_state.selected() {
                     if let Some(project) = self.store.projects.get(idx) {
                         if !project.path.is_empty() && Path::new(&project.path).exists() {
+                            let current = project
+                                .run_command
+                                .as_deref()
+                                .or_else(|| {
+                                    self.selected_detection
+                                        .as_ref()
+                                        .and_then(|d| d.run_command.as_deref())
+                                });
+                            match current {
+                                Some(cmd) => self.run_cmd_input.set_hint(&format!("Current: {}", cmd)),
+                                None => self.run_cmd_input.set_hint("Current: not set"),
+                            }
                             self.run_cmd_input.show();
                             self.input_mode = InputMode::EditRunCmd;
                         }
@@ -281,12 +293,19 @@ impl App {
                 }
             }
             KeyCode::Char('i') => {
+                self.import_path_input.set_hint("Enter absolute path to project");
                 self.import_path_input.show();
                 self.input_mode = InputMode::ImportPath;
             }
             KeyCode::Char('c') => {
-                if let Some(ref dir) = self.store.install_dir {
-                    self.install_dir_input.set_value(dir);
+                match &self.store.install_dir {
+                    Some(dir) => {
+                        self.install_dir_input.set_hint(&format!("Current: {}", dir));
+                        self.install_dir_input.set_value(dir);
+                    }
+                    None => {
+                        self.install_dir_input.set_hint("Current: not set");
+                    }
                 }
                 self.install_dir_input.show();
                 self.input_mode = InputMode::SetInstallDir;
@@ -300,6 +319,7 @@ impl App {
                             if let Some(install_dir) = self.store.get_install_dir() {
                                 self.clone_selected_to(install_dir);
                             } else {
+                                self.clone_path_input.set_hint("Enter directory to clone into");
                                 self.clone_path_input.show();
                                 self.input_mode = InputMode::ClonePath;
                             }

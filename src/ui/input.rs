@@ -2,6 +2,7 @@ use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
@@ -12,6 +13,8 @@ pub struct InputDialog {
     pub title: String,
     pub value: String,
     pub visible: bool,
+    /// Hint text shown when input is empty (e.g. current value or "not set")
+    pub hint: Option<String>,
 }
 
 impl InputDialog {
@@ -20,6 +23,7 @@ impl InputDialog {
             title: title.to_string(),
             value: String::new(),
             visible: false,
+            hint: None,
         }
     }
 
@@ -32,8 +36,13 @@ impl InputDialog {
         self.value = value.to_string();
     }
 
+    pub fn set_hint(&mut self, hint: &str) {
+        self.hint = Some(hint.to_string());
+    }
+
     pub fn hide(&mut self) {
         self.visible = false;
+        self.hint = None;
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> Option<String> {
@@ -66,22 +75,39 @@ impl InputDialog {
 
         // Center the dialog
         let width = 60.min(area.width.saturating_sub(4));
-        let height = 3;
+        let height = if self.hint.is_some() && self.value.is_empty() { 4 } else { 3 };
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
         let dialog_area = Rect::new(x, y, width, height);
 
         frame.render_widget(Clear, dialog_area);
 
-        let input = Paragraph::new(self.value.as_str())
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" {} ", self.title))
-                    .title_style(theme::accent_title())
-                    .border_style(theme::active_border()),
-            );
+        let lines: Vec<Line> = if self.value.is_empty() {
+            if let Some(ref hint) = self.hint {
+                vec![
+                    Line::from(Span::styled(
+                        hint.as_str(),
+                        Style::default().fg(theme::FG_DIM),
+                    )),
+                    Line::from(Span::styled("_", Style::default().fg(Color::White))),
+                ]
+            } else {
+                vec![Line::from(Span::styled("_", Style::default().fg(Color::White)))]
+            }
+        } else {
+            vec![Line::from(Span::styled(
+                self.value.as_str(),
+                Style::default().fg(Color::White),
+            ))]
+        };
+
+        let input = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", self.title))
+                .title_style(theme::accent_title())
+                .border_style(theme::active_border()),
+        );
         frame.render_widget(input, dialog_area);
     }
 }
