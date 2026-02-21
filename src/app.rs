@@ -183,7 +183,15 @@ impl App {
             }
             InputMode::SetInstallDir => {
                 if let Some(dir) = self.install_dir_input.handle_key(key) {
-                    self.store.install_dir = if dir.is_empty() { None } else { Some(dir) };
+                    if dir.is_empty() {
+                        self.store.install_dir = None;
+                    } else {
+                        // Canonicalize the path to ensure it's absolute and valid
+                        let path = std::path::PathBuf::from(&dir);
+                        let resolved = path.canonicalize().unwrap_or(path);
+                        self.store.install_dir =
+                            Some(resolved.to_string_lossy().to_string());
+                    }
                     let _ = self.store.save();
                     self.input_mode = InputMode::Normal;
                 }
@@ -304,7 +312,8 @@ impl App {
             if !url.is_empty() {
                 let dest = install_dir.join(name);
                 if self.clone_repo(url, &dest) {
-                    dest.to_str().unwrap_or("").to_string()
+                    let resolved = dest.canonicalize().unwrap_or(dest);
+                    resolved.to_str().unwrap_or("").to_string()
                 } else {
                     String::new()
                 }
@@ -374,7 +383,9 @@ impl App {
 
             let dest = base_dir.join(&name);
             if self.clone_repo(&repo_url, &dest) {
-                if let Some(dest_str) = dest.to_str() {
+                // Canonicalize to ensure we store an absolute path
+                let resolved = dest.canonicalize().unwrap_or(dest);
+                if let Some(dest_str) = resolved.to_str() {
                     if let Some(project) = self.store.get_mut(&name) {
                         project.path = dest_str.to_string();
                     }
