@@ -1,137 +1,94 @@
 # Claude Manager
 
-A personal project dashboard for tracking and managing git repositories across multiple machines.
+A TUI (terminal user interface) for managing development projects. Run dev servers, spawn Claude terminals, monitor git status, and track ports — all from one dashboard.
 
-## Prerequisites
+## Features
 
-### Windows
+- **Process Management** — Start and stop dev servers with automatic dependency installation and port assignment
+- **Claude Integration** — Spawn terminal sessions with the `claude` CLI in any project directory
+- **Git Status** — Live branch, staged/modified/untracked counts, and ahead/behind tracking
+- **Port Monitoring** — Scan 60 common dev ports (3000-3010, 4000-4010, 5000-5010, 8000-8010, etc.) with process names
+- **Project Detection** — Auto-detect project types (JavaScript, Rust, Go, Python) and package managers (npm, pnpm, yarn, bun)
+- **GitHub Import** — Add projects from your GitHub repos, clone them, or scan local directories
+- **Auto-Update** — Background update checks with one-key install
+- **Cross-Platform** — Windows, macOS (Apple Silicon), and Linux
 
-1. **Rust toolchain** - Install via [rustup](https://rustup.rs/):
-   ```powershell
-   winget install Rustlang.Rustup
-   ```
-   Or download and run the installer from https://rustup.rs/
+## Keyboard Shortcuts
 
-2. **GitHub CLI** - Required for syncing project data:
-   ```powershell
-   winget install GitHub.cli
-   ```
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Navigate project list |
+| `r` | Run project (fetch, install deps, start dev server + Claude terminal) |
+| `x` | Stop project |
+| `e` | Edit run command |
+| `a` | Add project from GitHub |
+| `i` | Import project from local path |
+| `g` | Git clone a project |
+| `s` | Scan directories for git repos |
+| `c` | Configure clone/install directory |
+| `d` | Delete project |
+| `u` | Install available update |
+| `F5` | Full refresh |
+| `q` | Quit |
 
-3. **Authenticate with GitHub**:
-   ```powershell
-   gh auth login
-   ```
+## Installation
 
-### macOS
+### Download a Release
 
-1. **Rust toolchain** - Install via [rustup](https://rustup.rs/):
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-   Or via Homebrew:
-   ```bash
-   brew install rust
-   ```
+Pre-built binaries are available for Windows, macOS (Apple Silicon), and Linux.
 
-2. **GitHub CLI**:
-   ```bash
-   brew install gh
-   ```
+1. Go to the [Releases](https://github.com/stephenfjohnson/claude-manager/releases) page
+2. Download the archive for your platform:
+   - **Windows:** `claude-manager-x86_64-pc-windows-msvc.zip`
+   - **macOS:** `claude-manager-aarch64-apple-darwin.tar.gz`
+   - **Linux:** `claude-manager-x86_64-unknown-linux-gnu.tar.gz`
+3. Extract the binary and place it somewhere on your `PATH`
 
-3. **Authenticate with GitHub**:
-   ```bash
-   gh auth login
-   ```
+**Windows:**
+```powershell
+# Extract the zip, then move the binary to a directory on your PATH
+Expand-Archive claude-manager-x86_64-pc-windows-msvc.zip -DestinationPath .
+```
 
-### Linux
+**macOS / Linux:**
+```bash
+tar xzf claude-manager-*.tar.gz
+chmod +x claude-manager
+sudo mv claude-manager /usr/local/bin/
+```
 
-1. **Rust toolchain** - Install via [rustup](https://rustup.rs/):
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
+After the first install, Claude Manager will notify you of new versions and can update itself with the `u` key.
 
-2. **GitHub CLI** - Install based on your distribution:
+### Build from Source
 
-   **Debian/Ubuntu:**
-   ```bash
-   sudo apt install gh
-   ```
-
-   **Fedora:**
-   ```bash
-   sudo dnf install gh
-   ```
-
-   **Arch Linux:**
-   ```bash
-   sudo pacman -S github-cli
-   ```
-
-3. **Authenticate with GitHub**:
-   ```bash
-   gh auth login
-   ```
-
-## Building
+Requires the [Rust toolchain](https://rustup.rs/).
 
 ```bash
 cargo build --release
 ```
 
-The binary will be at:
-- **Windows:** `target\release\claude-manager.exe`
-- **macOS/Linux:** `target/release/claude-manager`
+The binary will be at `target/release/claude-manager` (or `claude-manager.exe` on Windows).
 
-## Running
+## Prerequisites
 
-### First-time setup
-
-Initialize Claude Manager on your machine:
+The [GitHub CLI](https://cli.github.com/) (`gh`) is required for adding projects from GitHub:
 
 ```bash
-cargo run -- --init
+gh auth login
 ```
 
-Or if using the built binary:
-
-**Windows:**
-```powershell
-.\target\release\claude-manager.exe --init
-```
-
-**macOS/Linux:**
-```bash
-./target/release/claude-manager --init
-```
-
-This will:
-- Generate a unique machine ID
-- Set up a sync repository on GitHub
-- Optionally scan for existing git repositories to import
-
-### Normal usage
-
-After initialization, run without arguments to start the TUI:
+## Usage
 
 ```bash
-cargo run
+claude-manager
 ```
 
-Or using the built binary:
+On first launch, you can scan for existing git repositories or add projects from GitHub.
 
-**Windows:**
-```powershell
-.\target\release\claude-manager.exe
-```
+## Configuration
 
-**macOS/Linux:**
-```bash
-./target/release/claude-manager
-```
+Settings are stored in `~/.claude-manager/projects.toml`. You can configure:
 
-## Features
-
-- Track projects across multiple machines
-- Scan directories for existing git repositories
-- Sync project data via GitHub
-- TUI interface for managing projects
+- **Install directory** — where new projects are cloned (set with `c`)
+- **Run commands** — per-project override for the dev server command (set with `e`)
+- **Projects** — added via GitHub import, local path, directory scan, or git clone
