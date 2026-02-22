@@ -873,6 +873,7 @@ impl App {
         self.maybe_refresh_ports();
 
         let has_running = !self.process_manager.running_projects().is_empty();
+        let help_height = self.help_bar_height(frame.area().width);
 
         let main_chunks = if has_running && self.show_logs {
             Layout::default()
@@ -881,7 +882,7 @@ impl App {
                     Constraint::Min(10),
                     Constraint::Length(10),
                     Constraint::Length(1),
-                    Constraint::Length(1),
+                    Constraint::Length(help_height),
                 ])
                 .split(frame.area())
         } else {
@@ -890,7 +891,7 @@ impl App {
                 .constraints([
                     Constraint::Min(0),
                     Constraint::Length(1),
-                    Constraint::Length(1),
+                    Constraint::Length(help_height),
                 ])
                 .split(frame.area())
         };
@@ -1039,7 +1040,7 @@ impl App {
         frame.render_widget(para, area);
     }
 
-    fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
+    fn help_items(&self) -> Vec<Span<'static>> {
         let gh_label = if self.gh_available {
             "[a]dd from GitHub"
         } else {
@@ -1051,25 +1052,67 @@ impl App {
             None => "[c]lone dir: not set".to_string(),
         };
 
-        let mut help_spans = vec![
-            Span::styled(format!(" {}  ", gh_label), theme::label()),
-            Span::styled("[i]mport path  ", theme::label()),
-            Span::styled("[s]can repos  ", theme::label()),
-            Span::styled("[g]it clone  ", theme::label()),
-            Span::styled("[e]dit cmd  ", theme::label()),
-            Span::styled("[r]un  ", theme::status_running()),
-            Span::styled("[x]stop  ", Style::default().fg(theme::DANGER)),
-            Span::styled("[d]elete  ", theme::label()),
-            Span::styled(format!("{}  ", cfg_label), theme::label()),
-            Span::styled("[F5]refresh  ", theme::label()),
-            Span::styled("[q]uit", theme::label()),
+        let mut items = vec![
+            Span::styled(format!(" {} ", gh_label), theme::label()),
+            Span::styled(" [i]mport path ", theme::label()),
+            Span::styled(" [s]can repos ", theme::label()),
+            Span::styled(" [g]it clone ", theme::label()),
+            Span::styled(" [e]dit cmd ", theme::label()),
+            Span::styled(" [r]un ", theme::status_running()),
+            Span::styled(" [x]stop ", Style::default().fg(theme::DANGER)),
+            Span::styled(" [d]elete ", theme::label()),
+            Span::styled(format!(" {} ", cfg_label), theme::label()),
+            Span::styled(" [F5]refresh ", theme::label()),
+            Span::styled(" [q]uit ", theme::label()),
         ];
 
         if self.update_available.is_some() {
-            help_spans.push(Span::styled("  [u]pdate available", Style::default().fg(theme::WARNING)));
+            items.push(Span::styled(" [u]pdate available ", Style::default().fg(theme::WARNING)));
         }
 
-        let help = Paragraph::new(Line::from(help_spans));
+        items
+    }
+
+    fn help_bar_height(&self, width: u16) -> u16 {
+        let items = self.help_items();
+        let mut row_width: usize = 0;
+        let mut rows: u16 = 1;
+        for item in &items {
+            let item_width = item.content.len();
+            if row_width > 0 && row_width + item_width > width as usize {
+                rows += 1;
+                row_width = item_width;
+            } else {
+                row_width += item_width;
+            }
+        }
+        rows
+    }
+
+    fn render_help_bar(&self, frame: &mut Frame, area: Rect) {
+        let items = self.help_items();
+        let max_width = area.width as usize;
+
+        let mut lines: Vec<Line> = Vec::new();
+        let mut current_spans: Vec<Span> = Vec::new();
+        let mut row_width: usize = 0;
+
+        for item in items {
+            let item_width = item.content.len();
+            if row_width > 0 && row_width + item_width > max_width {
+                lines.push(Line::from(current_spans));
+                current_spans = vec![item];
+                row_width = item_width;
+            } else {
+                row_width += item_width;
+                current_spans.push(item);
+            }
+        }
+        if !current_spans.is_empty() {
+            lines.push(Line::from(current_spans));
+        }
+
+        let help = Paragraph::new(lines);
         frame.render_widget(help, area);
     }
 

@@ -174,7 +174,12 @@ impl ProcessManager {
             }
             #[cfg(windows)]
             {
-                let _ = child.kill();
+                // taskkill /T kills the entire process tree (cmd.exe + node, etc.)
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
             let _ = child.kill();
