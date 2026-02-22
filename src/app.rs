@@ -740,15 +740,48 @@ impl App {
 
         #[cfg(target_os = "windows")]
         {
-            // Try Windows Terminal first, fall back to cmd
-            let child = if Command::new("where")
+            // Detect shell: prefer pwsh (PowerShell 7) > powershell (5.1) > cmd
+            let has_pwsh = Command::new("where")
+                .arg("pwsh")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            let (ps_shell, has_ps) = if has_pwsh {
+                ("pwsh", true)
+            } else {
+                // Windows PowerShell 5.1 is always installed, but verify
+                let has_powershell = Command::new("where")
+                    .arg("powershell")
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                ("powershell", has_powershell)
+            };
+
+            let has_wt = Command::new("where")
                 .arg("wt")
                 .output()
                 .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                Command::new("wt")
-                    .args(["-d", &path_str, "cmd", "/k", "claude"])
+                .unwrap_or(false);
+
+            // Try Windows Terminal first, fall back to standalone shell
+            // Shell preference: pwsh > powershell > cmd
+            let child = if has_wt {
+                if has_ps {
+                    Command::new("wt")
+                        .args(["-d", &path_str, ps_shell, "-NoExit", "-Command", "claude"])
+                        .spawn()
+                        .ok()
+                } else {
+                    Command::new("wt")
+                        .args(["-d", &path_str, "cmd", "/k", "claude"])
+                        .spawn()
+                        .ok()
+                }
+            } else if has_ps {
+                Command::new(ps_shell)
+                    .args(["-NoExit", "-Command", &format!("Set-Location '{}'; claude", path_str)])
                     .spawn()
                     .ok()
             } else {
