@@ -1016,7 +1016,7 @@ impl App {
         }
 
         spans.push(Span::styled(
-            format!(" \u{2502} v{}", env!("CARGO_PKG_VERSION")),
+            format!(" \u{2502} v{}", option_env!("GIT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))),
             theme::label(),
         ));
 

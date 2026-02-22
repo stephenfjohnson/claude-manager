@@ -18,7 +18,7 @@ impl UpdateChecker {
             "https://api.github.com/repos/{}/{}/releases/latest",
             owner, repo
         );
-        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let current_version = option_env!("GIT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")).to_string();
 
         thread::spawn(move || {
             let result = check_for_update(&url, &current_version);
